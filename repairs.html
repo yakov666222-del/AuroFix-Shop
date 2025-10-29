@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>תיקונים — AuroFix</title>
+  <link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+  <div class="nav">
+    <div class="inner container">
+      <div class="logo">
+        <img src="assets/logo.png" alt="logo">
+        <div class="brand">
+          <span id="brandName">AuroFix — מערכת Shop</span>
+          <small>נתונים נשמרים מקומית בדפדפן (LocalStorage)</small>
+        </div>
+      </div>
+      <div class="tabs">
+        <a class="tab" data-tab="board" href="index.html">לוח</a>
+        <a class="tab" data-tab="repairs" href="repairs.html">תיקונים</a>
+        <a class="tab" data-tab="customers" href="customers.html">לקוחות</a>
+        <a class="tab" data-tab="inventory" href="inventory.html">מלאי</a>
+        <a class="tab" data-tab="new" href="ticket.html">טופס תיקון חדש</a>
+      </div>
+    </div>
+  </div>
+  <div class="container">
+    
+<div class="card">
+  <h3>תיקונים</h3>
+  <table class="table" id="tbl">
+    <thead><tr><th>פעולות</th><th>מחיר</th><th>מכשיר</th><th>סטטוס</th><th>ID</th></tr></thead>
+    <tbody></tbody>
+  </table>
+</div>
+<script>
+function render(){
+  const db = loadDB(); const tb = el('#tbl tbody'); tb.innerHTML='';
+  db.repairs.forEach((r,i)=>{
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td>
+      <a class='btn' href='qr.html?id=${encodeURIComponent(r.id)}'>QR</a>
+      <button class='btn danger' onclick='del(${i})'>מחק</button></td>
+      <td>${formatCurrency(r.price||0)}</td>
+      <td>${r.device||''}</td><td>${r.status||'חדש'}</td><td><span class='pill'>${r.id}</span></td>`;
+    tb.appendChild(tr);
+  });
+}
+function del(i){ const db=loadDB(); db.repairs.splice(i,1); saveDB(db); render();}
+render();
+</script>
+
+  </div>
+  <div class="footer">© תיקונים • הכל נשמר מקומית אצלך.</div>
+  <script src="js/core.js"></script>
+  <script>navInit('repairs')</script>
+</body>
+</html>

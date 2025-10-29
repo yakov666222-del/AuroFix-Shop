@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>לקוחות — AuroFix</title>
+  <link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+  <div class="nav">
+    <div class="inner container">
+      <div class="logo">
+        <img src="assets/logo.png" alt="logo">
+        <div class="brand">
+          <span id="brandName">AuroFix — מערכת Shop</span>
+          <small>נתונים נשמרים מקומית בדפדפן (LocalStorage)</small>
+        </div>
+      </div>
+      <div class="tabs">
+        <a class="tab" data-tab="board" href="index.html">לוח</a>
+        <a class="tab" data-tab="repairs" href="repairs.html">תיקונים</a>
+        <a class="tab" data-tab="customers" href="customers.html">לקוחות</a>
+        <a class="tab" data-tab="inventory" href="inventory.html">מלאי</a>
+        <a class="tab" data-tab="new" href="ticket.html">טופס תיקון חדש</a>
+      </div>
+    </div>
+  </div>
+  <div class="container">
+    
+<div class="card">
+  <h3>לקוח חדש</h3>
+  <div class="grid4" style="grid-template-columns:repeat(4,1fr)">
+    <input id="cname" class="input" placeholder="שם">
+    <input id="cphone" class="input" placeholder="טלפון">
+    <input id="cnotes" class="input" placeholder="הערות">
+    <button class="btn" onclick="addC()">הוסף</button>
+  </div>
+</div>
+<div class="card">
+  <h3>לקוחות</h3>
+  <table class="table" id="tbl"><thead><tr><th>פעולות</th><th>טלפון</th><th>שם</th></tr></thead><tbody></tbody></table>
+</div>
+<script>
+function render(){
+  const tb = el('#tbl tbody'); tb.innerHTML='';
+  const db = loadDB();
+  db.customers.forEach((c,i)=>{
+    const tr=document.createElement('tr');
+    tr.innerHTML = `<td><button class='btn danger' onclick='del(${i})'>מחק</button></td><td>${c.phone||''}</td><td>${c.name||''}</td>`;
+    tb.appendChild(tr);
+  })
+}
+function addC(){
+  const db = loadDB();
+  db.customers.push({name:cname.value.trim(), phone:cphone.value.trim(), notes:cnotes.value.trim(), id: uid('C')});
+  saveDB(db); cname.value=cphone.value=cnotes.value=''; render();
+}
+function del(i){ const db=loadDB(); db.customers.splice(i,1); saveDB(db); render();}
+render();
+</script>
+
+  </div>
+  <div class="footer">© לקוחות • הכל נשמר מקומית אצלך.</div>
+  <script src="js/core.js"></script>
+  <script>navInit('customers')</script>
+</body>
+</html>

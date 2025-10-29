@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>מלאי — AuroFix</title>
+  <link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+  <div class="nav">
+    <div class="inner container">
+      <div class="logo">
+        <img src="assets/logo.png" alt="logo">
+        <div class="brand">
+          <span id="brandName">AuroFix — מערכת Shop</span>
+          <small>נתונים נשמרים מקומית בדפדפן (LocalStorage)</small>
+        </div>
+      </div>
+      <div class="tabs">
+        <a class="tab" data-tab="board" href="index.html">לוח</a>
+        <a class="tab" data-tab="repairs" href="repairs.html">תיקונים</a>
+        <a class="tab" data-tab="customers" href="customers.html">לקוחות</a>
+        <a class="tab" data-tab="inventory" href="inventory.html">מלאי</a>
+        <a class="tab" data-tab="new" href="ticket.html">טופס תיקון חדש</a>
+      </div>
+    </div>
+  </div>
+  <div class="container">
+    
+<div class="card">
+  <h3>הוספת חלק למלאי</h3>
+  <div class="grid4" style="grid-template-columns:repeat(4,1fr)">
+    <input id="sku" class="input" placeholder="מק״ט">
+    <input id="name" class="input" placeholder="שם חלק">
+    <input id="qty" class="input" placeholder="כמות" type="number" min="0">
+    <button class="btn" onclick="addItem()">הוסף</button>
+  </div>
+</div>
+<div class="card">
+  <h3>מלאי</h3>
+  <table class="table" id="tbl">
+    <thead><tr><th>פעולות</th><th>כמות</th><th>שם</th><th>מק״ט</th></tr></thead>
+    <tbody></tbody>
+  </table>
+  <div style="display:flex;gap:8px;margin-top:8px">
+    <button class="btn secondary" onclick="exportJSON()">יצוא JSON</button>
+    <button class="btn danger" onclick="wipe()">איפוס מלאי</button>
+  </div>
+</div>
+<script>
+function render(){
+  const db = loadDB();
+  const tb = el('#tbl tbody'); tb.innerHTML='';
+  db.inventory.forEach((i,idx)=>{
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td><button class='btn secondary' onclick='inc(${idx})'>+</button>
+                    <button class='btn secondary' onclick='dec(${idx})'>-</button></td>
+                    <td>${i.qty||0}</td><td>${i.name||''}</td><td><span class='pill'>${i.sku||''}</span></td>`;
+    tb.appendChild(tr);
+  });
+}
+function addItem(){
+  const db = loadDB();
+  db.inventory.push({ sku: sku.value.trim(), name: name.value.trim(), qty: Number(qty.value||0) });
+  saveDB(db); sku.value=name.value=qty.value=''; render();
+}
+function inc(i){ const db=loadDB(); db.inventory[i].qty=(Number(db.inventory[i].qty)||0)+1; saveDB(db); render();}
+function dec(i){ const db=loadDB(); db.inventory[i].qty=Math.max(0,(Number(db.inventory[i].qty)||0)-1); saveDB(db); render();}
+function exportJSON(){
+  const a = document.createElement('a');
+  a.href = 'data:application/json;charset=utf-8,' + encodeURIComponent(JSON.stringify(loadDB().inventory,null,2));
+  a.download = 'inventory.json'; a.click();
+}
+function wipe(){ if(confirm('לאפס מלאי?')){ const db=loadDB(); db.inventory=[]; saveDB(db); render(); } }
+render();
+</script>
+
+  </div>
+  <div class="footer">© מלאי • הכל נשמר מקומית אצלך.</div>
+  <script src="js/core.js"></script>
+  <script>navInit('inventory')</script>
+</body>
+</html>

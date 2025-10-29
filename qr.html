@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>QR — AuroFix</title>
+  <link rel="stylesheet" href="css/styles.css">
+  <style>
+    .qr-wrap{display:flex;flex-direction:column;align-items:center;gap:12px;margin-top:36px}
+    .meta{color:var(--sub);font-weight:700}
+  </style>
+</head>
+<body>
+  <div class="nav">
+    <div class="inner container">
+      <div class="logo">
+        <img src="assets/logo.png" alt="logo"><div class="brand"><span id="brandName">AuroFix — מערכת Shop</span><small>עמוד הדפסה</small></div>
+      </div>
+      <div class="tabs"><a class="tab" href="repairs.html">חזרה לתיקונים</a></div>
+    </div>
+  </div>
+  <div class="container">
+    <div class="card qr-wrap">
+      <img id="qr" alt="QR">
+      <div class="meta" id="meta"></div>
+      <div style="display:flex;gap:8px">
+        <button class="btn" onclick="window.print()">הדפס</button>
+        <a class="btn secondary" href="repairs.html">סגור</a>
+      </div>
+    </div>
+  </div>
+  <script src="js/core.js"></script>
+  <script>
+    const params = new URLSearchParams(location.search);
+    const id = params.get('id') || 'DEMO0123';
+    const db = loadDB();
+    const r = db.repairs.find(x => x.id===id) || {device:'iPhone 11', price:0, id};
+    el('#meta').textContent = r.device + ' • ' + id;
+    const data = JSON.stringify({id:r.id, device:r.device, createdAt:r.createdAt});
+    const url = 'https://chart.googleapis.com/chart?chs=300x300&cht=qr&chl=' + encodeURIComponent(data);
+    el('#qr').src = url;
+    // ensure image fully loaded before print if auto-print used in future
+  </script>
+</body>
+</html>

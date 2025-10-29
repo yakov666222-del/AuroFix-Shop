@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>טופס חדש — AuroFix</title>
+  <link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+  <div class="nav">
+    <div class="inner container">
+      <div class="logo">
+        <img src="assets/logo.png" alt="logo">
+        <div class="brand">
+          <span id="brandName">AuroFix — מערכת Shop</span>
+          <small>נתונים נשמרים מקומית בדפדפן (LocalStorage)</small>
+        </div>
+      </div>
+      <div class="tabs">
+        <a class="tab" data-tab="board" href="index.html">לוח</a>
+        <a class="tab" data-tab="repairs" href="repairs.html">תיקונים</a>
+        <a class="tab" data-tab="customers" href="customers.html">לקוחות</a>
+        <a class="tab" data-tab="inventory" href="inventory.html">מלאי</a>
+        <a class="tab" data-tab="new" href="ticket.html">טופס תיקון חדש</a>
+      </div>
+    </div>
+  </div>
+  <div class="container">
+    
+<div class="card">
+  <h3>טופס תיקון חדש</h3>
+  <div class="grid4" style="grid-template-columns:repeat(2,1fr)">
+    <input id="device" class="input" placeholder="מכשיר לדוגמה: iPhone 11">
+    <input id="imei" class="input" placeholder="IMEI / S/N">
+    <input id="color" class="input" placeholder="צבע">
+    <input id="customer" class="input" placeholder="שם לקוח (אופציונלי)">
+    <textarea id="desc" class="input" placeholder="תיאור תקלה"></textarea>
+    <input id="price" class="input" placeholder="מחיר (₪)" type="number" min="0">
+  </div>
+  <div class="card" style="margin-top:12px;background:var(--muted)">
+    <h3>חלקים בשימוש (יוריד מהמלאי)</h3>
+    <div id="partsBox"></div>
+    <button class="btn secondary" onclick="addPart()">הוסף חלק</button>
+  </div>
+  <div style="margin-top:14px;display:flex;gap:8px">
+    <button class="btn" onclick="save()">שמור & צור QR</button>
+    <a class="btn secondary" href="repairs.html">חזור</a>
+  </div>
+</div>
+<script>
+let parts = [];
+function addPart(){
+  const idx = parts.length;
+  const wrap = document.createElement('div'); wrap.style='display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:8px;margin:8px 0';
+  wrap.innerHTML = `<input class='input' placeholder='מק״ט' id='p_sku_${idx}'>
+                    <input class='input' placeholder='שם חלק' id='p_name_${idx}'>
+                    <input class='input' placeholder='כמות' type='number' id='p_qty_${idx}'>
+                    <input class='input' placeholder='עלות ליח׳ (₪)' type='number' id='p_cost_${idx}'>`;
+  el('#partsBox').appendChild(wrap);
+  parts.push(idx);
+}
+function collectParts(){
+  return parts.map(i => ({
+    sku: el('#p_sku_'+i).value.trim(),
+    name: el('#p_name_'+i).value.trim(),
+    qty: Number(el('#p_qty_'+i).value||0),
+    cost: Number(el('#p_cost_'+i).value||0)
+  })).filter(p => p.sku);
+}
+function save(){
+  const db = loadDB();
+  const r = {
+    id: uid('DEM'),
+    device: device.value.trim(),
+    imei: imei.value.trim(),
+    color: color.value.trim(),
+    customer: customer.value.trim(),
+    desc: desc.value.trim(),
+    price: Number(price.value||0),
+    status: 'חדש',
+    partsUsed: collectParts(),
+    createdAt: new Date().toISOString()
+  };
+  db.repairs.unshift(r);
+  saveDB(db);
+  // adjust inventory
+  adjustInventoryByParts(r.partsUsed);
+  // go to QR page
+  location.href = 'qr.html?id=' + encodeURIComponent(r.id);
+}
+</script>
+
+  </div>
+  <div class="footer">© טופס חדש • הכל נשמר מקומית אצלך.</div>
+  <script src="js/core.js"></script>
+  <script>navInit('new')</script>
+</body>
+</html>

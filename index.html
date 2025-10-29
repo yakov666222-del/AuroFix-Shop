@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>לוח — AuroFix</title>
+  <link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+  <div class="nav">
+    <div class="inner container">
+      <div class="logo">
+        <img src="assets/logo.png" alt="logo">
+        <div class="brand">
+          <span id="brandName">AuroFix — מערכת Shop</span>
+          <small>נתונים נשמרים מקומית בדפדפן (LocalStorage)</small>
+        </div>
+      </div>
+      <div class="tabs">
+        <a class="tab" data-tab="board" href="index.html">לוח</a>
+        <a class="tab" data-tab="repairs" href="repairs.html">תיקונים</a>
+        <a class="tab" data-tab="customers" href="customers.html">לקוחות</a>
+        <a class="tab" data-tab="inventory" href="inventory.html">מלאי</a>
+        <a class="tab" data-tab="new" href="ticket.html">טופס תיקון חדש</a>
+      </div>
+    </div>
+  </div>
+  <div class="container">
+    
+<div class="grid4">
+  <div class="card"><h3>תיקונים</h3><div id="kpiRepairs" class="kpi">0</div></div>
+  <div class="card"><h3>לקוחות</h3><div id="kpiCustomers" class="kpi">0</div></div>
+  <div class="card"><h3>יתרת חודש (₪)</h3><div id="kpiBalance" class="kpi">0</div></div>
+  <div class="card"><h3>מלאי</h3><div id="kpiStock" class="kpi">0</div></div>
+</div>
+<div style="margin-top:16px" class="badge">טיפ: אפשר לייצא גיבוי JSON מתוך המלאי או התיקונים.</div>
+<script>
+ const db = loadDB();
+ el('#kpiRepairs').textContent = db.repairs.length;
+ el('#kpiCustomers').textContent = db.customers.length;
+ el('#kpiStock').textContent = db.inventory.reduce((a,c)=>a+(Number(c.qty)||0),0);
+ // סכום הכנסות מינוס עלויות חלקים
+ let revenue = 0, cost=0;
+ db.repairs.forEach(r=>{ revenue += Number(r.price||0); if(r.partsUsed) r.partsUsed.forEach(p=> cost += (Number(p.cost||0)*Number(p.qty||0))); });
+ el('#kpiBalance').textContent = (revenue - cost).toLocaleString('he-IL');
+</script>
+
+  </div>
+  <div class="footer">© לוח • הכל נשמר מקומית אצלך.</div>
+  <script src="js/core.js"></script>
+  <script>navInit('board')</script>
+</body>
+</html>
