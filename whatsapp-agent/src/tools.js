@@ -1,7 +1,7 @@
 // הכלים שהסוכן יכול להפעיל.
 // ללקוחות יש רק כלי אחד (להעביר הודעה לבעלים) - כדי שאף לקוח לא יוכל
 // "לשכנע" את הסוכן לשלוח הודעות בשמך. כל שאר הכלים זמינים רק לך.
-import { chats, reminders, saveReminders } from "./store.js";
+import { chats, memory, reminders, saveMemory, saveReminders } from "./store.js";
 
 const strict = (props, required = Object.keys(props)) => ({
   type: "object",
@@ -24,6 +24,22 @@ export const CUSTOMER_TOOLS = [
 ];
 
 export const OWNER_TOOLS = [
+  {
+    name: "remember",
+    description:
+      "שומר בזיכרון הקבוע פרט חשוב על הבעלים או העסק (סטטוס עוסק, מחזור, יעדים, החלטות, אנשי קשר, העדפות). אם הנושא כבר קיים, המידע מתעדכן.",
+    strict: true,
+    input_schema: strict({
+      topic: { type: "string", description: "נושא קצר, למשל 'סטטוס העסק' או 'מחזור 2026'" },
+      fact: { type: "string", description: "המידע לשמירה" },
+    }),
+  },
+  {
+    name: "forget",
+    description: "מוחק נושא מהזיכרון הקבוע.",
+    strict: true,
+    input_schema: strict({ topic: { type: "string" } }),
+  },
   {
     name: "send_whatsapp_message",
     description:
@@ -107,6 +123,17 @@ export async function runTool(name, input, ctx) {
       );
       return "ההודעה הועברה לבעלים.";
     }
+
+    case "remember":
+      memory[input.topic] = input.fact;
+      saveMemory();
+      return "נשמר.";
+
+    case "forget":
+      if (!(input.topic in memory)) return "הנושא לא נמצא בזיכרון.";
+      delete memory[input.topic];
+      saveMemory();
+      return "נמחק.";
 
     case "send_whatsapp_message": {
       const jid = findChat(input.to) || phoneToJid(input.to);

@@ -16,7 +16,7 @@ import makeWASocket, {
   useMultiFileAuthState,
 } from "@whiskeysockets/baileys";
 import { runAgent } from "./agent.js";
-import { DATA_DIR, chats, clearHistory, logMessage, reminders, saveReminders, saveSettings, settings } from "./store.js";
+import { DATA_DIR, chats, clearHistory, logMessage, memory, reminders, saveReminders, saveSettings, settings } from "./store.js";
 import { findChat, phoneToJid } from "./tools.js";
 
 const logger = pino({ level: process.env.LOG_LEVEL || "warn" });
@@ -84,21 +84,24 @@ function overRateLimit(jid) {
 }
 
 // ---------- פקודות מהירות מהצ'אט "הודעה לעצמי" ----------
-const HELP = `🤖 *הסוכן האישי שלך*
-פשוט כתוב לי כאן מה לעשות, למשל:
-• "מי חיכה לתשובה היום?"
-• "תסכם לי את הצ'אט עם משה"
+const HELP = () => `🤖 *היועץ האישי שלך*
+פשוט כתוב לי כאן כל שאלה או בקשה, למשל:
+• "אני עוסק זעיר, מתי כדאי לעבור למורשה?"
+• "מה צריך כדי לפתוח חברה בע״מ ומה זה עולה?"
+• "איך לתמחר החלפת מסך לאייפון 15?"
+• "תכין לי תוכנית שיווק לחודש הקרוב"
+• "תזכיר לי ב-15 לחודש לשלם מקדמות"
 • "שלח ל-0501234567 שהטלפון מוכן לאיסוף"
-• "תזכיר לי מחר ב-9 להזמין מסכים"
+אפשר גם לשלוח צילום (קבלה, מסמך, מכתב מרשות המסים) ולשאול עליו.
 
 פקודות מהירות:
-!כבה / !הפעל - עצירה/הפעלה של מענה אוטומטי
+!זיכרון - מה אני זוכר עליך
+!אפס - התחלת שיחה חדשה (הזיכרון הקבוע נשאר)
+!הפעל / !כבה - מענה אוטומטי ללקוחות (כרגע ${settings.autoReply ? "פועל" : "כבוי"})
 !סטטוס - מצב הסוכן
-!השתק <שם/מספר> - הסוכן לא יענה לאיש קשר הזה
-!בטל השתקה <שם/מספר>
+!השתק <שם/מספר> / !בטל השתקה <שם/מספר>
 !שחרר <שם/מספר> - החזרת צ'אט לסוכן אחרי שענית ידנית
-!קבוצות - הפעלה/כיבוי מענה בקבוצות
-!אפס - מחיקת זיכרון השיחה שלי עם הסוכן
+!קבוצות - מענה בקבוצות
 !עזרה`;
 
 function resolveJid(arg) {
@@ -111,17 +114,17 @@ async function handleCommand(text) {
   switch (cmd) {
     case "!עזרה":
     case "!help":
-      return HELP;
+      return HELP();
     case "!כבה":
     case "!off":
       settings.autoReply = false;
       saveSettings();
-      return "⏸️ המענה האוטומטי כבוי. (אני עדיין זמין לך כאן)";
+      return "⏸️ המענה האוטומטי ללקוחות כבוי. (אני עדיין כאן בשבילך)";
     case "!הפעל":
     case "!on":
       settings.autoReply = true;
       saveSettings();
-      return "▶️ המענה האוטומטי פועל.";
+      return "▶️ המענה האוטומטי ללקוחות פועל. אני אענה ללקוחות לפי business.md ואעדכן אותך כשצריך.";
     case "!קבוצות":
       settings.replyInGroups = !settings.replyInGroups;
       saveSettings();
@@ -158,7 +161,11 @@ async function handleCommand(text) {
     }
     case "!אפס":
       clearHistory(selfJid);
-      return "🧹 הזיכרון אופס.";
+      return "🧹 התחלנו שיחה חדשה. (מה שאני זוכר עליך ועל העסק נשאר, ראה !זיכרון)";
+    case "!זיכרון": {
+      const items = Object.entries(memory);
+      return items.length ? `🧠 מה שאני זוכר:\n${items.map(([k, v]) => `• *${k}*: ${v}`).join("\n")}` : "🧠 עדיין לא שמרתי כלום. ספר לי על העסק שלך!";
+    }
     default:
       return null; // לא פקודה - יעבור לסוכן
   }
@@ -198,6 +205,9 @@ async function onMessage(m) {
 
     if (isSelfChat) {
       // אתה מדבר עם הסוכן
+      if (isAudio && !text) {
+        return void (await sendText(selfJid, "🎤 עדיין אין לי אפשרות לשמוע הודעות קוליות. אפשר להקליד, או להשתמש בהכתבה של המקלדת (המיקרופון במקלדת)."));
+      }
       if (!text && !hasImage) return;
       const quick = text.startsWith("!") ? await handleCommand(text) : null;
       if (quick) return void (await sendText(selfJid, quick));
@@ -314,7 +324,7 @@ async function connect() {
       selfJid = jidNormalizedUser(sock.user.id);
       selfJids = new Set([selfJid, sock.user.lid && jidNormalizedUser(sock.user.lid)].filter(Boolean));
       console.log(`✅ מחובר כ-${selfJid}`);
-      await notifyOwner(`✅ הסוכן מחובר ופועל.\nכתוב !עזרה כדי לראות מה אפשר לעשות.`).catch(() => {});
+      await notifyOwner(`✅ היועץ האישי שלך מחובר.\nכתוב לי כאן כל שאלה, על העסק או על כל דבר אחר. כתוב !עזרה לדוגמאות.`).catch(() => {});
     }
     if (connection === "close") {
       connected = false;

@@ -25,7 +25,7 @@ function save(name, value) {
 
 // ---------- הגדרות (ניתנות לשינוי מהווטסאפ דרך פקודות) ----------
 const DEFAULT_SETTINGS = {
-  autoReply: true, // האם הסוכן עונה ללקוחות
+  autoReply: false, // מענה אוטומטי ללקוחות (כבוי כברירת מחדל, מפעילים עם !הפעל)
   replyInGroups: false, // האם לענות בקבוצות
   muted: {}, // jid -> true : צ'אטים שהסוכן לא עונה בהם
   pausedUntil: {}, // jid -> timestamp : השתלטות ידנית זמנית
@@ -50,17 +50,16 @@ export function logMessage(jid, from, text, meta = {}) {
 
 // ---------- היסטוריית שיחה עם Claude (טקסט בלבד) ----------
 // convo[key] = [{ role, content: string }]
-const MAX_TURNS = 40;
 export const convo = load("convo.json", {});
 
 export function getHistory(key) {
   return convo[key] ?? [];
 }
 
-export function appendHistory(key, userText, assistantText) {
+export function appendHistory(key, userText, assistantText, maxMessages = 40) {
   const h = (convo[key] ??= []);
   h.push({ role: "user", content: userText }, { role: "assistant", content: assistantText });
-  if (h.length > MAX_TURNS) h.splice(0, h.length - MAX_TURNS);
+  if (h.length > maxMessages) h.splice(0, h.length - maxMessages);
   save("convo.json", convo);
 }
 
@@ -72,3 +71,7 @@ export function clearHistory(key) {
 // ---------- תזכורות ----------
 export const reminders = load("reminders.json", []); // [{ id, at, text }]
 export const saveReminders = () => save("reminders.json", reminders);
+
+// ---------- זיכרון קבוע של היועץ עליך ועל העסק ----------
+export const memory = load("memory.json", {}); // { נושא: מידע }
+export const saveMemory = () => save("memory.json", memory);
