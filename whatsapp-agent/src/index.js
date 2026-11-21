@@ -543,6 +543,12 @@ async function connect() {
   });
 }
 
+const PUBLIC_HTML = `<!doctype html><html lang="he" dir="rtl"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>YakovPhone - מעבדת תיקון טלפונים</title><meta name="description" content="YakovPhone - מעבדת תיקון טלפונים סלולריים">
+<link rel="icon" href="/icon.svg"><style>body{margin:0;font-family:system-ui,sans-serif;background:#0d1311;color:#eef1ee;display:flex;min-height:100vh;align-items:center;justify-content:center;text-align:center;padding:24px}
+img{width:120px;height:120px;border-radius:26px}h1{margin:18px 0 6px;color:#f2c45a}p{color:#b9c6bf;max-width:420px;line-height:1.6}</style></head>
+<body><main><img src="/icon-512.png" alt="YakovPhone"><h1>YakovPhone</h1><p>מעבדת תיקון טלפונים סלולריים: מסכים, סוללות, שקעי טעינה ועוד.</p></main></body></html>`;
+
 // ---------- עמוד הגדרה: מפתח Claude + חיבור לווטסאפ (בקוד או ב-QR) ----------
 const page = (body) =>
   `<!doctype html><html dir="rtl" lang="he"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>היועץ האישי</title>
@@ -605,6 +611,11 @@ http
     }
     const secret = process.env.QR_PAGE_KEY;
     if (secret && url.searchParams.get("key") !== secret) {
+      // דף ציבורי קטן של העסק (בשביל פרופיל הווטסאפ ומנועי חיפוש). בלי שום מידע פרטי
+      if (url.pathname === "/" && req.method === "GET") {
+        res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+        return res.end(PUBLIC_HTML);
+      }
       res.writeHead(403, { "Content-Type": "text/plain; charset=utf-8" });
       return res.end("אין גישה");
     }
