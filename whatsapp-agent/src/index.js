@@ -36,6 +36,7 @@ let selfJid = null;
 let latestQr = null;
 let pairingCode = null;
 let pairPhone = null; // מספר שביקשו עבורו קוד חיבור
+let pairingSock = null; // החיבור שיצר את הקוד (קוד תקף רק בחיבור שיצר אותו)
 let connected = false;
 let retries = 0;
 const startedAt = Math.floor(Date.now() / 1000);
@@ -357,6 +358,13 @@ setInterval(async () => {
 
 // ---------- חיבור לווטסאפ ----------
 async function connect() {
+  // סוגרים חיבור קודם (אם יש) כדי שלא יהיו שני חיבורים במקביל
+  if (sock) {
+    try {
+      sock.ev.removeAllListeners();
+      sock.end(undefined);
+    } catch {}
+  }
   const { state, saveCreds } = await useMultiFileAuthState(path.join(DATA_DIR, "auth"));
   const { version } = await fetchLatestBaileysVersion().catch(() => ({ version: undefined }));
 
@@ -382,9 +390,13 @@ async function connect() {
       // ביקשו חיבור בקוד: מבקשים קוד מהחיבור הנוכחי (כל חיבור חדש = קוד חדש)
       if (pairPhone && !pairingCode && !sock.authState.creds.registered) {
         try {
-          const code = await sock.requestPairingCode(pairPhone);
-          pairingCode = code?.match(/.{1,4}/g)?.join("-") || code;
-          console.log("🔑 נוצר קוד חיבור חדש");
+          const thisSock = sock;
+          const code = await thisSock.requestPairingCode(pairPhone);
+          if (thisSock === sock) {
+            pairingCode = code?.match(/.{1,4}/g)?.join("-") || code;
+            pairingSock = thisSock;
+            console.log("🔑 נוצר קוד חיבור חדש");
+          }
         } catch (e) {
           console.log("⚠️ בקשת קוד חיבור נכשלה:", e.message);
         }
@@ -482,13 +494,13 @@ http
       if (phone.length < 11 || phone.length > 15) return back("מספר הטלפון לא נראה תקין. כתוב למשל 0501234567");
       pairPhone = phone;
       pairingCode = null;
-      if (sock.authState.creds.registered) return back("כבר מחובר");
+      pairingSock = null;
+      if (sock?.authState?.creds?.registered) return back("כבר מחובר");
+      // פותחים חיבור חדש ונקי. הקוד ייווצר בו תוך כמה שניות
+      console.log("📞 התבקש קוד חיבור, פותח חיבור חדש");
       try {
-        const code = await sock.requestPairingCode(phone);
-        pairingCode = code?.match(/.{1,4}/g)?.join("-") || code;
-      } catch {
-        // החיבור הנוכחי לא מוכן: קוד ייווצר אוטומטית בחיבור הבא
-      }
+        sock.end(new Error("pairing requested"));
+      } catch {}
       return back();
     }
 
@@ -510,7 +522,7 @@ http
       body += `<div class="card"><h2>✅ הכל מחובר!</h2><p>פתח בווטסאפ את הצ'אט עם <b>עצמך</b> (חפש את השם שלך, או "אני (הודעה לעצמי)") וכתוב שם כל שאלה.</p></div>`;
       return res.end(page(body));
     }
-    if (pairingCode) {
+    if (pairingCode && pairingSock === sock) {
       body += `<div class="card"><h2>שלב 2 מתוך 2: הקלד את הקוד בווטסאפ</h2><div class="code">${pairingCode}</div>
 <ol><li>פתח את <b>ווטסאפ</b></li><li><b>הגדרות</b> › <b>מכשירים מקושרים</b> › <b>קישור מכשיר</b></li><li>למטה לחץ <b>"קישור באמצעות מספר טלפון"</b></li><li>הקלד את הקוד שלמעלה, מהר (תוך דקה)</li></ol>
 <small>הקוד מתחלף לפעמים. תמיד השתמש בקוד שמופיע כאן עכשיו. הדף מתעדכן לבד.</small>
