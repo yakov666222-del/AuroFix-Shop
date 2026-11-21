@@ -424,7 +424,9 @@ async function connect() {
     }
     if (connection === "close") {
       connected = false;
-      pairingCode = null; // הקוד הישן כבר לא תקף. בחיבור הבא ייווצר חדש
+      // הקוד הישן כבר לא תקף. לא מבקשים קוד חדש לבד (כל בקשה שולחת התראה לטלפון)
+      if (pairingCode) pairPhone = null;
+      pairingCode = null;
       latestQr = null;
       const code = lastDisconnect?.error?.output?.statusCode;
       console.log(`🔌 החיבור נסגר (קוד ${code ?? "?"})`);
