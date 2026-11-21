@@ -424,7 +424,8 @@ async function connect() {
         setTimeout(connect, 2000);
         return;
       }
-      const wait = Math.min(60, 3 * 2 ** retries++);
+      // עוד לא מחובר (מחכה לקוד/QR): מתחברים מחדש מיד. מחובר שנפל: מחכים יותר ויותר
+      const wait = sock?.authState?.creds?.registered ? Math.min(60, 3 * 2 ** retries++) : 2;
       console.log(`🔄 החיבור נותק, מתחבר מחדש בעוד ${wait} שניות...`);
       setTimeout(connect, wait * 1000);
     }
