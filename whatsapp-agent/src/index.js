@@ -448,8 +448,9 @@ http
     if (req.method === "POST" && url.pathname === "/apikey") {
       const k = (await readBody(req)).get("apikey")?.trim() || "";
       if (k.startsWith("sk-ant-")) fs.writeFileSync(path.join(DATA_DIR, "anthropic_key"), k, { mode: 0o600 });
-      else if (k.startsWith("AIza") && k.length > 30) fs.writeFileSync(path.join(DATA_DIR, "gemini_key"), k, { mode: 0o600 });
-      else return back("זה לא נראה כמו מפתח. מפתח של Gemini מתחיל ב-AIza, ושל Claude ב-sk-ant-");
+      // מפתחות של גוגל מתחילים ב-AIza (פורמט ישן) או ב-AQ. (פורמט חדש)
+      else if (/^[A-Za-z0-9._\-]{30,}$/.test(k)) fs.writeFileSync(path.join(DATA_DIR, "gemini_key"), k, { mode: 0o600 });
+      else return back("זה לא נראה כמו מפתח. ודא שהעתקת את כולו, בלי רווחים (לחץ Copy key)");
       return back();
     }
     if (req.method === "POST" && url.pathname === "/pair") {
@@ -473,7 +474,7 @@ http
     if (!getApiKey()) {
       body += `<div class="card"><h2>שלב 1 מתוך 2: המפתח</h2>
 <ol><li>פתח את <a href="https://aistudio.google.com/apikey" target="_blank">aistudio.google.com/apikey</a> (כניסה עם גוגל)</li><li>לחץ <b>Create API key</b> והעתק</li><li>הדבק כאן:</li></ol>
-<form method="post" action="/apikey${self}"><input name="apikey" placeholder="AIza..." autocomplete="off" required><button>שמור</button></form>
+<form method="post" action="/apikey${self}"><input name="apikey" placeholder="AQ... או AIza..." autocomplete="off" required><button>שמור</button></form>
 <small>המפתח נשמר רק בשרת שלך. (אפשר גם מפתח של Claude שמתחיל ב-sk-ant-)</small></div>`;
       return res.end(page(body));
     }
