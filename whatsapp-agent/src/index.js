@@ -37,6 +37,7 @@ let latestQr = null;
 let pairingCode = null;
 let pairPhone = null; // מספר שביקשו עבורו קוד חיבור
 let pairingSock = null; // החיבור שיצר את הקוד (קוד תקף רק בחיבור שיצר אותו)
+let registeredSince = null; // מתי הטלפון אישר את הקוד
 let connected = false;
 let retries = 0;
 const startedAt = Math.floor(Date.now() / 1000);
@@ -379,7 +380,9 @@ async function connect() {
 
   sock.ev.on("creds.update", saveCreds);
 
-  sock.ev.on("connection.update", async ({ connection, lastDisconnect, qr }) => {
+  sock.ev.on("connection.update", async ({ connection, lastDisconnect, qr, isNewLogin }) => {
+    if (isNewLogin) console.log("🎉 הטלפון אישר את החיבור (התחברות חדשה)");
+    if (connection === "connecting") console.log("…מתחבר לווטסאפ");
     if (qr) {
       latestQr = qr;
       if (process.stdout.isTTY) {
@@ -404,6 +407,7 @@ async function connect() {
     }
     if (connection === "open") {
       connected = true;
+      registeredSince = null;
       retries = 0;
       latestQr = null;
       pairingCode = null;
@@ -488,6 +492,16 @@ http
       else return back("זה לא נראה כמו מפתח. ודא שהעתקת את כולו, בלי רווחים (לחץ Copy key)");
       return back();
     }
+    if (req.method === "POST" && url.pathname === "/reset") {
+      if (connected) return back("כבר מחובר");
+      console.log("♻️ איפוס החיבור לבקשת המשתמש");
+      fs.rmSync(path.join(DATA_DIR, "auth"), { recursive: true, force: true });
+      registeredSince = null;
+      pairPhone = null;
+      pairingCode = null;
+      connect();
+      return back();
+    }
     if (req.method === "POST" && url.pathname === "/pair") {
       let phone = ((await readBody(req)).get("phone") || "").replace(/\D/g, "");
       if (phone.startsWith("0")) phone = "972" + phone.slice(1);
@@ -496,6 +510,7 @@ http
       pairingCode = null;
       pairingSock = null;
       if (connected) return back("כבר מחובר");
+      if (sock?.authState?.creds?.registered) return back("הטלפון כבר אישר קוד, החיבור בתהליך. אל תבקש קוד חדש.");
       // פותחים חיבור חדש ונקי. הקוד ייווצר בו תוך כמה שניות
       console.log("📞 התבקש קוד חיבור, פותח חיבור חדש");
       try {
@@ -520,6 +535,17 @@ http
     // שלב 2: חיבור לווטסאפ
     if (connected) {
       body += `<div class="card"><h2>✅ הכל מחובר!</h2><p>פתח בווטסאפ את הצ'אט עם <b>עצמך</b> (חפש את השם שלך, או "אני (הודעה לעצמי)") וכתוב שם כל שאלה.</p></div>`;
+      return res.end(page(body));
+    }
+    // הטלפון כבר אישר את הקוד, מחכים לסיום החיבור: לא נותנים קוד חדש
+    if (sock?.authState?.creds?.registered) {
+      registeredSince ??= Date.now();
+      const stuck = Date.now() - registeredSince > 3 * 60_000;
+      body += `<div class="card"><h2>⏳ מתחבר...</h2><p>הטלפון אישר את הקוד. עוד כמה שניות תקבל בווטסאפ הודעה "✅ מחובר!". <b>אל תבקש קוד חדש.</b></p>${
+        stuck
+          ? `<p>זה לוקח יותר מדי זמן.</p><form method="post" action="/reset${self}"><button style="background:#c0392b">התחל את החיבור מההתחלה</button></form>`
+          : ""
+      }</div><script>setTimeout(()=>location.reload(),5000)</script>`;
       return res.end(page(body));
     }
     if (pairingCode && pairingSock === sock) {
