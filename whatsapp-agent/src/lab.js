@@ -3,13 +3,33 @@
 const LAB = (process.env.LAB_API_URL || "").replace(/\/$/, "");
 export const labEnabled = Boolean(LAB);
 
+// אם שרת המעבדה ישן, פנייה לכתובת הציבורית שלו מעירה אותו
+const WAKE = process.env.LAB_WAKE_URL || "";
+async function wakeLab() {
+  if (!WAKE) return;
+  await fetch(WAKE, { redirect: "manual", signal: AbortSignal.timeout(20000) }).catch(() => {});
+}
+
 async function api(path, opts = {}) {
   if (!LAB) throw new Error("החיבור למערכת המעבדה לא מוגדר.");
-  const res = await fetch(LAB + path, {
-    ...opts,
-    headers: { "Content-Type": "application/json", ...(opts.headers || {}) },
-    signal: AbortSignal.timeout(15000),
-  });
+  const call = () =>
+    fetch(LAB + path, {
+      ...opts,
+      headers: { "Content-Type": "application/json", ...(opts.headers || {}) },
+      signal: AbortSignal.timeout(15000),
+    });
+  let res;
+  try {
+    res = await call();
+  } catch {
+    // לא עונה: כנראה ישן. מעירים ומנסים שוב כמה פעמים
+    await wakeLab();
+    for (let i = 0; i < 5 && !res; i++) {
+      await new Promise((r) => setTimeout(r, 2000));
+      res = await call().catch(() => null);
+    }
+    if (!res) throw new Error("מערכת המעבדה לא עונה כרגע.");
+  }
   if (!res.ok) throw new Error(`מערכת המעבדה החזירה שגיאה ${res.status}: ${(await res.text()).slice(0, 200)}`);
   return res.json();
 }

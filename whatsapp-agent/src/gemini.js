@@ -1,34 +1,57 @@
 // מנוע Gemini (מסלול חינמי של גוגל). אותם כלים ואותן הנחיות כמו ב-Claude.
 import { GoogleGenAI } from "@google/genai";
 
-// כינויים של גוגל שתמיד מצביעים על הדגם העדכני. אם הראשון לא זמין או עבר מכסה, עוברים לשני.
-const MODELS = [process.env.GEMINI_MODEL || "gemini-flash-latest", "gemini-flash-lite-latest"];
-
 let ai = null;
 let aiKey = null;
 function client(apiKey) {
   if (!ai || aiKey !== apiKey) {
     ai = new GoogleGenAI({ apiKey });
     aiKey = apiKey;
+    modelsCache = null;
   }
   return ai;
 }
 
+// מוצאים לבד אילו דגמים זמינים למפתח: קודם flash-lite (מהיר), אחר כך flash (חכם יותר)
+let modelsCache = null;
+const ver = (n) => (n.match(/gemini-(\d+(?:\.\d+)?)/)?.[1] ?? "0").split(".").map(Number);
+const newer = (a, b) => { const [x, y] = [ver(a), ver(b)]; return (y[0] - x[0]) || ((y[1] ?? 0) - (x[1] ?? 0)); };
+async function models(apiKey) {
+  if (process.env.GEMINI_MODEL) return [process.env.GEMINI_MODEL];
+  if (modelsCache) return modelsCache;
+  const names = [];
+  try {
+    for await (const m of await client(apiKey).models.list()) {
+      if ((m.supportedActions || []).includes("generateContent")) names.push(m.name.replace(/^models\//, ""));
+    }
+  } catch {}
+  const plain = names.filter((n) => /^gemini-[\d.]+-flash(-lite)?$/.test(n));
+  const lite = plain.filter((n) => n.endsWith("-lite")).sort(newer);
+  const flash = plain.filter((n) => !n.endsWith("-lite")).sort(newer);
+  modelsCache = [...lite.slice(0, 2), ...flash.slice(0, 2)];
+  if (!modelsCache.length) modelsCache = ["gemini-3.5-flash-lite", "gemini-3.5-flash"];
+  return modelsCache;
+}
+
+const withTimeout = (p, ms) =>
+  Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(Object.assign(new Error("timeout"), { status: 504 })), ms))]);
+
 async function generate(apiKey, params) {
   let lastErr;
-  for (const model of MODELS) {
+  for (const model of await models(apiKey)) {
     try {
-      return await client(apiKey).models.generateContent({ model, ...params });
+      return await withTimeout(client(apiKey).models.generateContent({ model, ...params }), 45000);
     } catch (e) {
       lastErr = e;
       const code = e?.status ?? e?.code;
-      if (![404, 429, 503].includes(code)) throw e; // שגיאה אחרת - לא מנסים דגם אחר
+      if (![404, 429, 500, 503, 504].includes(code)) throw e; // שגיאה אחרת: לא מנסים דגם אחר
+      console.log(`⚠️ Gemini ${model} לא זמין (${code}), מנסה דגם אחר`);
     }
   }
   if ((lastErr?.status ?? lastErr?.code) === 429) {
     throw new Error("הגעתי למכסה החינמית של Gemini להיום. נסה שוב מאוחר יותר.");
   }
-  throw lastErr;
+  throw new Error("Gemini עמוס כרגע. נסה שוב בעוד דקה.");
 }
 
 // חיפוש בגוגל כבקשה נפרדת, כך שאפשר לשלב אותו עם שאר הכלים

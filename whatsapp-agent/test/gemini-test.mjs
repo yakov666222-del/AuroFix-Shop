@@ -13,7 +13,7 @@ const fakeGen = async function (params) {
   if (n === 3) return fc("remember", { topic: "שלב", fact: "עוסק זעיר" });
   return { text: "נכון לעכשיו (2026) התקרה היא כ-122,833 ₪. רוצה שנבדוק כמה הכנסת השנה?", candidates: [{ content: { role: "model", parts: [{ text: "..." }] } }] };
 };
-(await import("../src/gemini.js")).__setTestClient({ models: { generateContent: fakeGen } }, "AIza-test");
+process.env.GEMINI_MODEL = "gemini-test"; (await import("../src/gemini.js")).__setTestClient({ models: { generateContent: fakeGen } }, "AIza-test");
 const { runAgent, provider } = await import("../src/agent.js");
 const { memory } = await import("../src/store.js");
 console.log("provider:", provider());
