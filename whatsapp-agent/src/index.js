@@ -15,7 +15,8 @@ import makeWASocket, {
   jidNormalizedUser,
   useMultiFileAuthState,
 } from "@whiskeysockets/baileys";
-import { runAgent } from "./agent.js";
+import fs from "node:fs";
+import { getApiKey, runAgent } from "./agent.js";
 import { DATA_DIR, chats, clearHistory, logMessage, memory, reminders, saveReminders, saveSettings, settings } from "./store.js";
 import { findChat, phoneToJid } from "./tools.js";
 
@@ -26,15 +27,13 @@ const MAX_REPLIES_PER_HOUR = Number(process.env.MAX_REPLIES_PER_HOUR || 20);
 const PORT = Number(process.env.PORT || 3000);
 const OWNER_NAME = process.env.OWNER_NAME || "יעקב";
 
-if (!process.env.ANTHROPIC_API_KEY) {
-  console.error("❌ חסר ANTHROPIC_API_KEY בקובץ .env (ראה .env.example)");
-  process.exit(1);
-}
+if (!getApiKey()) console.log("⚠️ עדיין אין מפתח של Claude. אפשר להדביק אותו בעמוד ההגדרה.");
 
 let sock;
 let selfJids = new Set(); // המספר שלך (בפורמט טלפון ובפורמט LID)
 let selfJid = null;
 let latestQr = null;
+let pairingCode = null;
 let connected = false;
 let retries = 0;
 const startedAt = Math.floor(Date.now() / 1000);
@@ -321,6 +320,7 @@ async function connect() {
       connected = true;
       retries = 0;
       latestQr = null;
+      pairingCode = null;
       selfJid = jidNormalizedUser(sock.user.id);
       selfJids = new Set([selfJid, sock.user.lid && jidNormalizedUser(sock.user.lid)].filter(Boolean));
       console.log(`✅ מחובר כ-${selfJid}`);
@@ -330,8 +330,11 @@ async function connect() {
       connected = false;
       const code = lastDisconnect?.error?.output?.statusCode;
       if (code === DisconnectReason.loggedOut) {
-        console.log("🚪 התנתקת מהווטסאפ. מחק את data/auth והפעל מחדש כדי לסרוק שוב.");
-        process.exit(1);
+        console.log("🚪 התנתקת מהווטסאפ. מתחיל חיבור חדש...");
+        fs.rmSync(path.join(DATA_DIR, "auth"), { recursive: true, force: true });
+        pairingCode = null;
+        setTimeout(connect, 2000);
+        return;
       }
       const wait = Math.min(60, 3 * 2 ** retries++);
       console.log(`🔄 החיבור נותק, מתחבר מחדש בעוד ${wait} שניות...`);
@@ -345,23 +348,87 @@ async function connect() {
   });
 }
 
-// ---------- עמוד קטן להצגת QR (שימושי כשמריצים על שרת) ----------
+// ---------- עמוד הגדרה: מפתח Claude + חיבור לווטסאפ (בקוד או ב-QR) ----------
+const page = (body) =>
+  `<!doctype html><html dir="rtl" lang="he"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>היועץ האישי</title>
+<style>body{font-family:system-ui,sans-serif;max-width:480px;margin:0 auto;padding:24px 16px;line-height:1.6;background:#f6f7f9;color:#111}
+.card{background:#fff;border-radius:14px;padding:20px;box-shadow:0 1px 4px #0002;margin-bottom:16px}
+input,button{font-size:18px;width:100%;box-sizing:border-box;padding:12px;border-radius:10px;border:1px solid #ccc;margin-top:8px}
+button{background:#25d366;color:#fff;border:0;font-weight:bold}.code{font-size:34px;letter-spacing:4px;font-weight:bold;text-align:center;direction:ltr;background:#eefbf2;padding:12px;border-radius:10px}
+ol{padding-inline-start:20px}small{color:#666}</style><body>${body}</body></html>`;
+
+function readBody(req) {
+  return new Promise((resolve) => {
+    let d = "";
+    req.on("data", (c) => (d += c).length > 10000 && req.destroy());
+    req.on("end", () => resolve(new URLSearchParams(d)));
+  });
+}
+
 http
   .createServer(async (req, res) => {
-    const key = process.env.QR_PAGE_KEY;
-    if (key && !req.url.includes(`key=${key}`)) {
-      res.writeHead(403);
-      return res.end("forbidden");
+    const secret = process.env.QR_PAGE_KEY;
+    const url = new URL(req.url, "http://x");
+    if (secret && url.searchParams.get("key") !== secret) {
+      res.writeHead(403, { "Content-Type": "text/plain; charset=utf-8" });
+      return res.end("אין גישה");
     }
+    const self = `?key=${encodeURIComponent(secret || "")}`;
+    const back = (msg) => {
+      res.writeHead(303, { Location: `/${self}${msg ? `&msg=${encodeURIComponent(msg)}` : ""}` });
+      res.end();
+    };
+
+    if (req.method === "POST" && url.pathname === "/apikey") {
+      const k = (await readBody(req)).get("apikey")?.trim() || "";
+      if (!k.startsWith("sk-ant-")) return back("המפתח צריך להתחיל ב-sk-ant-");
+      fs.writeFileSync(path.join(DATA_DIR, "anthropic_key"), k, { mode: 0o600 });
+      return back();
+    }
+    if (req.method === "POST" && url.pathname === "/pair") {
+      let phone = ((await readBody(req)).get("phone") || "").replace(/\D/g, "");
+      if (phone.startsWith("0")) phone = "972" + phone.slice(1);
+      if (phone.length < 10) return back("מספר הטלפון לא נראה תקין");
+      try {
+        const code = await sock.requestPairingCode(phone);
+        pairingCode = code?.match(/.{1,4}/g)?.join("-") || code;
+      } catch (e) {
+        return back("לא הצלחתי לקבל קוד, נסה שוב בעוד דקה");
+      }
+      return back();
+    }
+
     res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
-    const body = connected
-      ? `<h2>✅ הסוכן מחובר לווטסאפ</h2>`
-      : latestQr
-        ? `<h2>סרוק עם ווטסאפ</h2><p>הגדרות › מכשירים מקושרים › קישור מכשיר</p><img src="${await QRCode.toDataURL(latestQr, { width: 320 })}"><script>setTimeout(()=>location.reload(),15000)</script>`
-        : `<h2>מתחבר...</h2><script>setTimeout(()=>location.reload(),3000)</script>`;
-    res.end(`<!doctype html><html dir="rtl"><meta name="viewport" content="width=device-width"><title>WhatsApp Agent</title><body style="font-family:sans-serif;text-align:center;padding:24px">${body}</body></html>`);
+    const msg = url.searchParams.get("msg");
+    let body = `<h1>🤖 היועץ האישי שלך</h1>${msg ? `<div class="card" style="background:#fff3f3">⚠️ ${msg.replace(/</g, "&lt;")}</div>` : ""}`;
+
+    // שלב 1: מפתח Claude
+    if (!getApiKey()) {
+      body += `<div class="card"><h2>שלב 1 מתוך 2: המפתח של Claude</h2>
+<form method="post" action="/apikey${self}"><input name="apikey" placeholder="sk-ant-..." autocomplete="off" required><button>שמור</button></form>
+<small>המפתח נשמר רק בשרת שלך.</small></div>`;
+      return res.end(page(body));
+    }
+
+    // שלב 2: חיבור לווטסאפ
+    if (connected) {
+      body += `<div class="card"><h2>✅ הכל מחובר!</h2><p>פתח בווטסאפ את הצ'אט עם <b>עצמך</b> (חפש את השם שלך, או "אני (הודעה לעצמי)") וכתוב שם כל שאלה.</p></div>`;
+      return res.end(page(body));
+    }
+    if (pairingCode) {
+      body += `<div class="card"><h2>שלב 2 מתוך 2: הקלד את הקוד בווטסאפ</h2><div class="code">${pairingCode}</div>
+<ol><li>פתח את <b>ווטסאפ</b></li><li><b>הגדרות</b> (באייפון: למטה מימין · באנדרואיד: ⋮ למעלה)</li><li><b>מכשירים מקושרים</b> › <b>קישור מכשיר</b></li><li>למטה לחץ <b>"קישור באמצעות מספר טלפון"</b></li><li>הקלד את הקוד שלמעלה</li></ol>
+<small>הדף יתעדכן לבד כשזה יתחבר.</small></div><script>setTimeout(()=>location.reload(),8000)</script>`;
+      return res.end(page(body));
+    }
+    body += `<div class="card"><h2>שלב 2 מתוך 2: חיבור לווטסאפ</h2><p>הכנס את מספר הטלפון שיש עליו את הווטסאפ שלך:</p>
+<form method="post" action="/pair${self}"><input name="phone" type="tel" placeholder="050-1234567" required><button>קבל קוד חיבור</button></form></div>`;
+    if (latestQr)
+      body += `<div class="card"><p><small>יש לך מחשב או טלפון נוסף? אפשר גם לסרוק:</small></p><img style="width:100%" src="${await QRCode.toDataURL(latestQr, { width: 320 })}"></div><script>setTimeout(()=>location.reload(),20000)</script>`;
+    else body += `<p><small>מתחבר לווטסאפ...</small></p><script>setTimeout(()=>location.reload(),3000)</script>`;
+    res.end(page(body));
   })
-  .listen(PORT, () => console.log(`🌐 עמוד QR: http://localhost:${PORT}`));
+  .listen(PORT, "0.0.0.0", () => console.log(`🌐 עמוד הגדרה: http://localhost:${PORT}`));
 
 console.log(`🤖 סוכן ווטסאפ של ${OWNER_NAME} עולה...`);
 connect();

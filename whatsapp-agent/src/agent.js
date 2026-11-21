@@ -1,10 +1,26 @@
 // המוח של הסוכן: שיחה עם Claude + לולאת כלים
 import fs from "node:fs";
+import path from "node:path";
 import Anthropic from "@anthropic-ai/sdk";
 import { CUSTOMER_TOOLS, OWNER_TOOLS, runTool } from "./tools.js";
-import { getHistory, appendHistory, memory } from "./store.js";
+import { DATA_DIR, getHistory, appendHistory, memory } from "./store.js";
 
-const client = new Anthropic(); // קורא את ANTHROPIC_API_KEY מהסביבה
+// המפתח נלקח מ-.env או מהקובץ data/anthropic_key (שנשמר דרך עמוד ההגדרה)
+let client = null;
+export function getApiKey() {
+  if (process.env.ANTHROPIC_API_KEY) return process.env.ANTHROPIC_API_KEY;
+  try {
+    return fs.readFileSync(path.join(DATA_DIR, "anthropic_key"), "utf8").trim() || null;
+  } catch {
+    return null;
+  }
+}
+function getClient() {
+  const apiKey = getApiKey();
+  if (!apiKey) throw new Error("חסר מפתח של Claude. פתח את עמוד ההגדרה והדבק אותו.");
+  if (!client || client.apiKey !== apiKey) client = new Anthropic({ apiKey });
+  return client;
+}
 const MODEL = process.env.CLAUDE_MODEL || "claude-opus-5-5";
 const OWNER_NAME = process.env.OWNER_NAME || "יעקב";
 const BUSINESS_NAME = process.env.BUSINESS_NAME || "AuroFix";
@@ -130,7 +146,7 @@ export async function runAgent(mode, key, text, images, ctx) {
   let finalText = "";
   let cited = "";
   for (let step = 0; step < 10; step++) {
-    const response = await client.beta.messages.create({
+    const response = await getClient().beta.messages.create({
       model: MODEL,
       max_tokens: 16000,
       system,
