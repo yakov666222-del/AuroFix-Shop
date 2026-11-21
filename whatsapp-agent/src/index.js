@@ -16,9 +16,10 @@ import makeWASocket, {
   useMultiFileAuthState,
 } from "@whiskeysockets/baileys";
 import fs from "node:fs";
-import { getApiKey, runAgent } from "./agent.js";
-import { DATA_DIR, chats, clearHistory, logMessage, memory, reminders, saveReminders, saveSettings, settings } from "./store.js";
-import { findChat, phoneToJid } from "./tools.js";
+import { OPENING, getApiKey, runAgent } from "./agent.js";
+import * as lab from "./lab.js";
+import { DATA_DIR, appendHistory, chats, clearHistory, convo, logMessage, memory, reminders, saveReminders, saveSettings, settings } from "./store.js";
+import { findChat, pendingChanges, phoneToJid } from "./tools.js";
 
 const logger = pino({ level: process.env.LOG_LEVEL || "warn" });
 const TAKEOVER_MIN = Number(process.env.TAKEOVER_MINUTES || 60);
@@ -83,14 +84,17 @@ function overRateLimit(jid) {
 }
 
 // ---------- פקודות מהירות מהצ'אט "הודעה לעצמי" ----------
-const HELP = () => `🤖 *היועץ האישי שלך*
+const HELP = () => `🤖 *המלווה העסקי של המעבדה*
 פשוט כתוב לי כאן כל שאלה או בקשה, למשל:
-• "אני עוסק זעיר, מתי כדאי לעבור למורשה?"
-• "מה צריך כדי לפתוח חברה בע״מ ומה זה עולה?"
-• "איך לתמחר החלפת מסך לאייפון 15?"
-• "תכין לי תוכנית שיווק לחודש הקרוב"
+• "אני בנקודת אפס, מאיפה מתחילים?"
+• "מה ההבדל בין עוסק זעיר למורשה?"
+• "השתמשתי בשני מסכים לאייפון 12"
+• "מה חסר במלאי?"
+• "איך אני מתמחר תיקון מסך?"
+• "קיבלתי 350 על החלפת סוללה"
 • "תזכיר לי ב-15 לחודש לשלם מקדמות"
 • "שלח ל-0501234567 שהטלפון מוכן לאיסוף"
+כל יום ראשון בבוקר תקבל ממני סיכום שבועי.
 אפשר גם לשלוח צילום (קבלה, מסמך, מכתב מרשות המסים) ולשאול עליו.
 
 פקודות מהירות:
@@ -160,6 +164,7 @@ async function handleCommand(text) {
     }
     case "!אפס":
       clearHistory(selfJid);
+      pendingChanges.splice(0);
       return "🧹 התחלנו שיחה חדשה. (מה שאני זוכר עליך ועל העסק נשאר, ראה !זיכרון)";
     case "!זיכרון": {
       const items = Object.entries(memory);
@@ -167,6 +172,59 @@ async function handleCommand(text) {
     }
     default:
       return null; // לא פקודה - יעבור לסוכן
+  }
+}
+
+// ---------- אישור שינויי מלאי ("כן" / "לא") ----------
+const YES = /^\s*(כן|כן כן|מאשר|אשר|מאושר|יאללה|סבבה|בסדר|אוקיי|אוקי|ok|okay|yes|👍|✅)[\s!.]*$/i;
+const NO = /^\s*(לא|בטל|ביטול|עזוב|no|cancel|❌|👎)[\s!.]*$/i;
+
+async function handleConfirmation(text) {
+  if (!YES.test(text) && !NO.test(text)) return null;
+  const changes = pendingChanges.splice(0).filter((c) => Date.now() - c.ts < 30 * 60_000); // הצעות ישנות פגות
+  if (!changes.length) return null;
+  let reply;
+  if (NO.test(text)) {
+    reply = "בוטל, לא שיניתי כלום במלאי.";
+  } else {
+    const lines = [];
+    for (const c of changes) {
+      try {
+        const r = await lab.adjustInventory(c.id, c.delta, c.reason);
+        lines.push(`✅ ${c.name}: ${c.delta > 0 ? "+" : ""}${c.delta}, עכשיו במלאי ${r.qty}`);
+      } catch (e) {
+        lines.push(`⚠️ ${c.name}: לא הצלחתי לעדכן (${e.message})`);
+      }
+    }
+    reply = `עודכן במלאי:\n${lines.join("\n")}`;
+  }
+  appendHistory(selfJid, text, reply, 120); // כדי שהמלווה יידע מה קרה
+  return reply;
+}
+
+// ---------- סיכום שבועי (יום ראשון בבוקר) ----------
+function israelNow() {
+  const parts = Object.fromEntries(
+    new Intl.DateTimeFormat("en-US", { timeZone: process.env.TZ_NAME || "Asia/Jerusalem", weekday: "short", hour: "numeric", hour12: false, year: "numeric", month: "2-digit", day: "2-digit" })
+      .formatToParts(new Date())
+      .map((p) => [p.type, p.value])
+  );
+  return { weekday: parts.weekday, hour: Number(parts.hour), date: `${parts.year}-${parts.month}-${parts.day}` };
+}
+
+async function maybeWeeklySummary() {
+  if (process.env.WEEKLY_SUMMARY === "false" || !getApiKey()) return;
+  const now = israelNow();
+  if (now.weekday !== "Sun" || now.hour < 9 || settings.lastWeekly === now.date) return;
+  settings.lastWeekly = now.date;
+  saveSettings();
+  const prompt =
+    "[הודעה אוטומטית, לא מהבעלים] תכין לי סיכום פתיחת שבוע קצר: מה חסר במלאי, תיקונים פתוחים, מצב המחזור השנתי מול התקרה, ותזכורות או מועדי דיווח שמתקרבים. בסוף, צעד אחד שכדאי לעשות השבוע.";
+  try {
+    const reply = await runAgent("owner", selfJid, prompt, [], { sendText, notifyOwner, chatJid: selfJid });
+    if (reply) await sendText(selfJid, `☀️ *סיכום שבועי*\n${reply}`);
+  } catch (e) {
+    logger.error(e, "weekly summary failed");
   }
 }
 
@@ -208,6 +266,8 @@ async function onMessage(m) {
         return void (await sendText(selfJid, "🎤 עדיין אין לי אפשרות לשמוע הודעות קוליות. אפשר להקליד, או להשתמש בהכתבה של המקלדת (המיקרופון במקלדת)."));
       }
       if (!text && !hasImage) return;
+      const confirm = pendingChanges.length ? await handleConfirmation(text) : null;
+      if (confirm) return void (await sendText(selfJid, confirm));
       const quick = text.startsWith("!") ? await handleCommand(text) : null;
       if (quick) return void (await sendText(selfJid, quick));
       const images = hasImage ? [await collectImage(m)].filter(Boolean) : [];
@@ -291,6 +351,7 @@ setInterval(async () => {
     reminders.splice(reminders.indexOf(r), 1);
   }
   if (due.length) saveReminders();
+  maybeWeeklySummary();
 }, 20_000);
 
 // ---------- חיבור לווטסאפ ----------
@@ -324,7 +385,12 @@ async function connect() {
       selfJid = jidNormalizedUser(sock.user.id);
       selfJids = new Set([selfJid, sock.user.lid && jidNormalizedUser(sock.user.lid)].filter(Boolean));
       console.log(`✅ מחובר כ-${selfJid}`);
-      await notifyOwner(`✅ היועץ האישי שלך מחובר.\nכתוב לי כאן כל שאלה, על העסק או על כל דבר אחר. כתוב !עזרה לדוגמאות.`).catch(() => {});
+      if (!convo[selfJid]?.length) {
+        await notifyOwner(`✅ מחובר!\n\n${OPENING}`).catch(() => {});
+        appendHistory(selfJid, "(התחברתי עכשיו)", OPENING, 120);
+      } else {
+        await notifyOwner("✅ חזרתי לפעול. אפשר להמשיך מאיפה שעצרנו.").catch(() => {});
+      }
     }
     if (connection === "close") {
       connected = false;

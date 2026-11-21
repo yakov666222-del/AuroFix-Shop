@@ -1,7 +1,11 @@
 // הכלים שהסוכן יכול להפעיל.
 // ללקוחות יש רק כלי אחד (להעביר הודעה לבעלים) - כדי שאף לקוח לא יוכל
 // "לשכנע" את הסוכן לשלוח הודעות בשמך. כל שאר הכלים זמינים רק לך.
-import { chats, memory, reminders, saveMemory, saveReminders } from "./store.js";
+import { chats, ledger, memory, reminders, saveLedger, saveMemory, saveReminders } from "./store.js";
+import * as lab from "./lab.js";
+
+// שינויי מלאי שממתינים לאישור הבעלים ("כן"). מבוצעים רק ב-index.js, לא על ידי המודל.
+export const pendingChanges = [];
 
 const strict = (props, required = Object.keys(props)) => ({
   type: "object",
@@ -20,6 +24,72 @@ export const CUSTOMER_TOOLS = [
       summary: { type: "string", description: "סיכום קצר של מה הלקוח צריך" },
       urgent: { type: "boolean", description: "האם דחוף" },
     }),
+  },
+];
+
+const LEDGER_TOOLS = [
+  {
+    name: "record_transaction",
+    description:
+      "רושם הכנסה או הוצאה של העסק ביומן (כשהבעלים מדווח למשל 'קיבלתי 300 על תיקון מסך' או 'קניתי חלקים ב-500'). לפני הרישום אשר בשורה אחת מה הבנת.",
+    strict: true,
+    input_schema: strict({
+      type: { type: "string", enum: ["income", "expense"] },
+      amount: { type: "number", description: "סכום בשקלים" },
+      desc: { type: "string", description: "תיאור קצר" },
+      date: { type: "string", description: "תאריך YYYY-MM-DD (היום אם לא נאמר אחרת)" },
+    }),
+  },
+  {
+    name: "ledger_summary",
+    description:
+      "סיכום הכנסות והוצאות לשנה: מה שדווח בווטסאפ + תשלומים שנרשמו במערכת המעבדה. השתמש כדי לעקוב אחרי המחזור השנתי מול תקרת העוסק הזעיר/פטור.",
+    strict: true,
+    input_schema: strict({ year: { type: "integer" } }),
+  },
+  {
+    name: "delete_transaction",
+    description: "מוחק רישום מהיומן לפי מזהה (אם נרשם בטעות).",
+    strict: true,
+    input_schema: strict({ id: { type: "string" } }),
+  },
+];
+
+const LAB_TOOLS = [
+  {
+    name: "search_inventory",
+    description: "מחפש פריט במלאי של מערכת המעבדה (לפי שם, דגם, מק\"ט או קטגוריה) ומחזיר כמות, מינימום, עלות, מחיר ומזהה (id).",
+    strict: true,
+    input_schema: strict({ query: { type: "string", description: "למשל 'מסך אייפון 12' או 'סוללה 11 פרו'" } }),
+  },
+  {
+    name: "inventory_shortages",
+    description: "מה חסר: פריטים מתחת לכמות המינימום, עם כמות מומלצת להזמנה ועלות משוערת.",
+    strict: true,
+    input_schema: strict({}),
+  },
+  {
+    name: "propose_inventory_change",
+    description:
+      "מציע שינוי כמות במלאי (delta שלילי = השתמשתי/מכרתי, חיובי = הגיעה הזמנה). השינוי לא מתבצע עד שהבעלים עונה 'כן'. קודם מצא את הפריט עם search_inventory כדי לקבל id. אחרי ההצעה, שאל את הבעלים בשורה אחת אם לאשר.",
+    strict: true,
+    input_schema: strict({
+      item_id: { type: "string" },
+      delta: { type: "integer" },
+      reason: { type: "string", description: "למשל 'שימוש בתיקון' או 'הגיעה הזמנה מספק'" },
+    }),
+  },
+  {
+    name: "find_repairs",
+    description: "מחפש תיקונים במערכת המעבדה לפי שם לקוח, דגם, תיאור או מספר תיקון. query ריק או 'פתוחים' מחזיר את כל התיקונים הפתוחים.",
+    strict: true,
+    input_schema: strict({ query: { type: "string" } }),
+  },
+  {
+    name: "lab_summary",
+    description: "סיכום כללי ממערכת המעבדה: תיקונים לפי סטטוס, לקוחות, הכנסות, יתרות פתוחות, חלקים נפוצים.",
+    strict: true,
+    input_schema: strict({}),
   },
 ];
 
@@ -84,6 +154,8 @@ export const OWNER_TOOLS = [
     strict: true,
     input_schema: strict({ id: { type: "string" } }),
   },
+  ...LEDGER_TOOLS,
+  ...(lab.labEnabled ? LAB_TOOLS : [])
 ];
 
 // ---------- עזרים ----------
@@ -134,6 +206,63 @@ export async function runTool(name, input, ctx) {
       delete memory[input.topic];
       saveMemory();
       return "נמחק.";
+
+    case "record_transaction": {
+      if (!(input.amount > 0)) return "הסכום חייב להיות חיובי.";
+      const id = Math.random().toString(36).slice(2, 7);
+      ledger.push({ id, type: input.type, amount: input.amount, desc: input.desc, date: input.date });
+      saveLedger();
+      return `נרשם (${id}).`;
+    }
+
+    case "delete_transaction": {
+      const i = ledger.findIndex((t) => t.id === input.id);
+      if (i < 0) return "לא נמצא רישום כזה.";
+      ledger.splice(i, 1);
+      saveLedger();
+      return "נמחק.";
+    }
+
+    case "ledger_summary": {
+      const y = String(input.year);
+      const rows = ledger.filter((t) => String(t.date).startsWith(y));
+      const sum = (type) => rows.filter((t) => t.type === type).reduce((a, t) => a + t.amount, 0);
+      const inc = sum("income");
+      const exp = sum("expense");
+      let labIncome = null;
+      if (lab.labEnabled) labIncome = await lab.labIncomeForYear(input.year).catch(() => null);
+      const recent = rows.slice(-10).map((t) => `${t.date} ${t.type === "income" ? "➕" : "➖"} ${t.amount} ₪ ${t.desc} (${t.id})`);
+      return `שנת ${y}:
+הכנסות שדווחו בווטסאפ: ${inc} ₪ | הוצאות שדווחו: ${exp} ₪ | רווח לפי היומן: ${inc - exp} ₪${
+        labIncome !== null ? `\nתשלומים שנרשמו במערכת המעבדה: ${Math.round(labIncome)} ₪ (ייתכן שחלקם כבר דווחו גם בווטסאפ, אל תספור פעמיים)` : ""
+      }
+רישומים אחרונים:\n${recent.join("\n") || "אין"}`;
+    }
+
+    case "search_inventory":
+      return lab.searchInventory(input.query);
+
+    case "inventory_shortages":
+      return lab.shortages();
+
+    case "find_repairs":
+      return lab.findRepairs(input.query);
+
+    case "lab_summary":
+      return lab.labSummary();
+
+    case "propose_inventory_change": {
+      const item = await lab.getItem(input.item_id).catch(() => null);
+      if (!item) return "הפריט לא נמצא. חפש קודם עם search_inventory.";
+      if (!Number.isInteger(input.delta) || input.delta === 0) return "שינוי לא תקין.";
+      const after = item.qty + input.delta;
+      if (after < 0) return `לא הגיוני: יש במלאי רק ${item.qty} יחידות של ${item.name}. שאל את הבעלים.`;
+      if (Math.abs(input.delta) > 50) return "כמות חריגה מאוד. ודא עם הבעלים את המספר לפני שמציעים.";
+      const existing = pendingChanges.findIndex((c) => c.id === item.id);
+      if (existing >= 0) pendingChanges.splice(existing, 1);
+      pendingChanges.push({ ts: Date.now(), id: item.id, name: item.name, delta: input.delta, before: item.qty, after, reason: input.reason });
+      return `ההצעה נשמרה וממתינה לאישור: ${item.name} ${input.delta > 0 ? "+" : ""}${input.delta} (מ-${item.qty} ל-${after}). עכשיו שאל את הבעלים בשורה אחת אם לאשר. הוא עונה "כן" או "לא".`;
+    }
 
     case "send_whatsapp_message": {
       const jid = findChat(input.to) || phoneToJid(input.to);

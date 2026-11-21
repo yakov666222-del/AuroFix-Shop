@@ -1,0 +1,18 @@
+process.env.DATA_DIR = "/tmp/wa-lab-test-" + Date.now();
+process.env.LAB_API_URL = "http://localhost:3881";
+(await import("./lab-mock.mjs")).start(3881);
+const { runTool, pendingChanges, OWNER_TOOLS } = await import("../src/tools.js");
+const lab = await import("../src/lab.js");
+const ctx = {};
+console.log("tools:", OWNER_TOOLS.map((t) => t.name).join(","));
+console.log(await runTool("search_inventory", { query: "מסך 12" }, ctx));
+console.log(await runTool("search_inventory", { query: "סמסונג" }, ctx));
+console.log(await runTool("inventory_shortages", {}, ctx));
+console.log(await runTool("propose_inventory_change", { item_id: "a1", delta: -2, reason: "שימוש" }, ctx));
+console.log(await runTool("propose_inventory_change", { item_id: "a2", delta: -5, reason: "x" }, ctx));
+console.log("pending:", pendingChanges);
+const r = await lab.adjustInventory("a1", -2, "שימוש"); console.log("adjusted:", r);
+console.log(await runTool("find_repairs", { query: "פתוחים" }, ctx));
+console.log(await runTool("record_transaction", { type: "income", amount: 350, desc: "סוללה", date: "2026-11-21" }, ctx));
+console.log(await runTool("ledger_summary", { year: 2026 }, ctx));
+process.exit(0);

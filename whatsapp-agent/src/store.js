@@ -75,3 +75,7 @@ export const saveReminders = () => save("reminders.json", reminders);
 // ---------- זיכרון קבוע של היועץ עליך ועל העסק ----------
 export const memory = load("memory.json", {}); // { נושא: מידע }
 export const saveMemory = () => save("memory.json", memory);
+
+// ---------- יומן הכנסות והוצאות (מה שהבעלים מדווח בווטסאפ) ----------
+export const ledger = load("ledger.json", []); // [{ id, type: "income"|"expense", amount, desc, date }]
+export const saveLedger = () => save("ledger.json", ledger);
