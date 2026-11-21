@@ -20,6 +20,7 @@ import { OPENING, getApiKey, runAgent } from "./agent.js";
 import * as lab from "./lab.js";
 import { DATA_DIR, appendHistory, chats, clearHistory, convo, logMessage, memory, reminders, saveReminders, saveSettings, settings } from "./store.js";
 import { findChat, pendingChanges, phoneToJid } from "./tools.js";
+import * as cloud from "./cloud.js";
 
 const logger = pino({ level: process.env.LOG_LEVEL || "warn" });
 const TAKEOVER_MIN = Number(process.env.TAKEOVER_MINUTES || 60);
@@ -47,6 +48,12 @@ const pending = {}; // jid -> { timer, texts: [], images: [] }
 
 // ---------- שליחה ----------
 async function sendText(jid, text) {
+  if (cloud.cloudEnabled()) {
+    // ווטסאפ רשמי: שולחים למספר (הבעלים או איש קשר)
+    await cloud.cloudSend(jid.split("@")[0], text);
+    logMessage(jid, "bot", text);
+    return null;
+  }
   const sent = await sock.sendMessage(jid, { text });
   if (sent?.key?.id) botSentIds.add(sent.key.id);
   logMessage(jid, "bot", text);
@@ -246,6 +253,42 @@ async function collectImage(m) {
   }
 }
 
+// ---------- הודעה ממך ליועץ (משותף לשני סוגי החיבור) ----------
+async function handleOwner(text, images, isVoice) {
+  if (isVoice) {
+    return void (await sendText(selfJid, "🎤 עדיין אין לי אפשרות לשמוע הודעות קוליות. אפשר להקליד, או להשתמש בהכתבה של המקלדת (המיקרופון במקלדת)."));
+  }
+  if (!text && !images.length) return;
+  const confirm = pendingChanges.length ? await handleConfirmation(text) : null;
+  if (confirm) return void (await sendText(selfJid, confirm));
+  const quick = text.startsWith("!") ? await handleCommand(text) : null;
+  if (quick) return void (await sendText(selfJid, quick));
+  try {
+    const reply = await runAgent("owner", selfJid, text, images, { sendText, notifyOwner, chatJid: selfJid });
+    if (reply) await sendText(selfJid, reply);
+  } catch (e) {
+    logger.error(e);
+    await sendText(selfJid, `⚠️ שגיאה: ${e.message}`).catch(() => {});
+  }
+}
+
+// ---------- ווטסאפ רשמי: הודעות נכנסות מ-Meta ----------
+const seenCloudIds = new Set();
+async function onCloudMessage(m) {
+  if (seenCloudIds.has(m.id)) return; // Meta לפעמים שולחת פעמיים
+  seenCloudIds.add(m.id);
+  if (seenCloudIds.size > 1000) seenCloudIds.clear();
+  if (Number(m.timestamp) < startedAt - 300) return;
+  if (cloud.normPhone(m.from) !== cloud.normPhone(cloud.cfg.ownerPhone)) {
+    console.log("📩 הודעה ממספר אחר, לא עונים");
+    return;
+  }
+  cloud.markRead(m.id);
+  const text = m.text?.body || m.image?.caption || "";
+  const images = m.type === "image" ? [await cloud.downloadImage(m.image.id).catch(() => null)].filter(Boolean) : [];
+  await handleOwner(text, images, m.type === "audio");
+}
+
 async function onMessage(m) {
   const jid = m.key.remoteJid;
   if (!jid || isJidStatusBroadcast(jid) || jid.endsWith("@newsletter") || jid.endsWith("@broadcast")) return;
@@ -265,23 +308,9 @@ async function onMessage(m) {
 
     if (isSelfChat) {
       // אתה מדבר עם הסוכן
-      if (isAudio && !text) {
-        return void (await sendText(selfJid, "🎤 עדיין אין לי אפשרות לשמוע הודעות קוליות. אפשר להקליד, או להשתמש בהכתבה של המקלדת (המיקרופון במקלדת)."));
-      }
-      if (!text && !hasImage) return;
-      const confirm = pendingChanges.length ? await handleConfirmation(text) : null;
-      if (confirm) return void (await sendText(selfJid, confirm));
-      const quick = text.startsWith("!") ? await handleCommand(text) : null;
-      if (quick) return void (await sendText(selfJid, quick));
       const images = hasImage ? [await collectImage(m)].filter(Boolean) : [];
-      try {
-        await sock.sendPresenceUpdate("composing", selfJid);
-        const reply = await runAgent("owner", selfJid, text, images, { sendText, notifyOwner, chatJid: selfJid });
-        if (reply) await sendText(selfJid, reply);
-      } catch (e) {
-        logger.error(e);
-        await sendText(selfJid, `⚠️ שגיאה: ${e.message}`);
-      }
+      await sock.sendPresenceUpdate("composing", selfJid).catch(() => {});
+      await handleOwner(text, images, isAudio && !text);
       return;
     }
 
@@ -476,6 +505,28 @@ http
   .createServer(async (req, res) => {
     const url = new URL(req.url, "http://x");
     // בדיקת חיים לעבודה המתוזמנת (שומרת את השרת ער). בלי מידע רגיש
+    if (url.pathname === "/webhook" && req.method === "GET") {
+      // Meta מאמתת את הכתובת
+      const ok = url.searchParams.get("hub.mode") === "subscribe" && url.searchParams.get("hub.verify_token") === cloud.cfg.verifyToken;
+      res.writeHead(ok ? 200 : 403, { "Content-Type": "text/plain" });
+      return res.end(ok ? url.searchParams.get("hub.challenge") || "" : "forbidden");
+    }
+    if (url.pathname === "/webhook" && req.method === "POST") {
+      const chunks = [];
+      for await (const c of req) chunks.push(c);
+      const raw = Buffer.concat(chunks);
+      res.writeHead(200);
+      res.end("ok"); // עונים מיד, ומטפלים ברקע
+      if (!cloud.cloudEnabled() || !cloud.validSignature(raw, req.headers["x-hub-signature-256"])) return;
+      let body;
+      try {
+        body = JSON.parse(raw.toString("utf8"));
+      } catch {
+        return;
+      }
+      for (const m of cloud.extractMessages(body)) onCloudMessage(m).catch((e) => logger.error(e, "cloud message"));
+      return;
+    }
     if (url.pathname === "/health") {
       res.writeHead(200, { "Content-Type": "text/plain" });
       return res.end(connected ? "ok connected" : "ok");
@@ -498,6 +549,39 @@ http
       else if (/^[A-Za-z0-9._\-]{30,}$/.test(k)) fs.writeFileSync(path.join(DATA_DIR, "gemini_key"), k, { mode: 0o600 });
       else return back("זה לא נראה כמו מפתח. ודא שהעתקת את כולו, בלי רווחים (לחץ Copy key)");
       return back();
+    }
+    if (req.method === "POST" && url.pathname === "/cloud") {
+      const f = await readBody(req);
+      for (const [k, name] of [["token", "token"], ["phoneNumberId", "phone_number_id"], ["ownerPhone", "owner_phone"], ["appSecret", "app_secret"]]) {
+        const v = (f.get(name) || "").trim();
+        if (v) cloud.cfg[k] = k === "ownerPhone" ? cloud.normPhone(v) : v;
+      }
+      cloud.saveCfg();
+      if (cloud.cloudEnabled()) {
+        startCloudMode();
+        await sendText(selfJid, `✅ מחובר!\n\n${OPENING}`).then(
+          () => convo[selfJid]?.length || appendHistory(selfJid, "(התחברתי עכשיו)", OPENING, 120),
+          (e) => console.log("⚠️ הודעת פתיחה לא נשלחה:", e.message)
+        );
+      }
+      return res.writeHead(303, { Location: `/cloud${self}` }), res.end();
+    }
+    if (url.pathname === "/cloud") {
+      res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+      const c = cloud.cfg;
+      const host = req.headers["x-forwarded-host"] || req.headers.host;
+      const st = cloud.cloudEnabled() ? "✅ מוגדר" : "עדיין לא מוגדר";
+      return res.end(
+        page(`<h1>📱 ווטסאפ רשמי</h1><div class="card"><p>מצב: <b>${st}</b></p>
+<p><b>כתובת Callback (להעתיק ל-Meta):</b></p><div class="code" style="font-size:15px;letter-spacing:0">https://${host}/webhook</div>
+<p><b>Verify token (להעתיק ל-Meta):</b></p><div class="code" style="font-size:15px;letter-spacing:0">${c.verifyToken}</div></div>
+<div class="card"><form method="post" action="/cloud${self}">
+<p>Access token ${c.token ? "(נשמר ✓, אפשר להחליף)" : ""}</p><input name="token" autocomplete="off">
+<p>Phone number ID ${c.phoneNumberId ? `(${c.phoneNumberId})` : ""}</p><input name="phone_number_id" inputmode="numeric" autocomplete="off">
+<p>המספר שלך (שממנו תכתוב ליועץ) ${c.ownerPhone ? `(${c.ownerPhone})` : ""}</p><input name="owner_phone" type="tel" placeholder="0501234567">
+<p>App secret (רשות, לאבטחה) ${c.appSecret ? "(נשמר ✓)" : ""}</p><input name="app_secret" autocomplete="off">
+<button>שמור</button></form></div>`)
+      );
     }
     if (req.method === "POST" && url.pathname === "/reset") {
       if (connected) return back("כבר מחובר");
@@ -576,5 +660,19 @@ http
   })
   .listen(PORT, "0.0.0.0", () => console.log(`🌐 עמוד הגדרה: http://localhost:${PORT}`));
 
+// ווטסאפ רשמי: אין חיבור לווטסאפ ווב, ההודעות מגיעות ל-/webhook
+function startCloudMode() {
+  try {
+    sock?.ev.removeAllListeners();
+    sock?.end(undefined);
+  } catch {}
+  sock = null;
+  selfJid = `${cloud.cfg.ownerPhone}@s.whatsapp.net`;
+  selfJids = new Set([selfJid]);
+  connected = true;
+  console.log("📱 מצב ווטסאפ רשמי (Meta) פעיל");
+}
+
 console.log(`🤖 סוכן ווטסאפ של ${OWNER_NAME} עולה...`);
-connect();
+if (cloud.cloudEnabled()) startCloudMode();
+else if (process.env.WA_MODE !== "cloud") connect();
