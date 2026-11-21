@@ -28,7 +28,7 @@ const MAX_REPLIES_PER_HOUR = Number(process.env.MAX_REPLIES_PER_HOUR || 20);
 const PORT = Number(process.env.PORT || 3000);
 const OWNER_NAME = process.env.OWNER_NAME || "יעקב";
 
-if (!getApiKey()) console.log("⚠️ עדיין אין מפתח של Claude. אפשר להדביק אותו בעמוד ההגדרה.");
+if (!getApiKey()) console.log("⚠️ עדיין אין מפתח (Gemini או Claude). אפשר להדביק אותו בעמוד ההגדרה.");
 
 let sock;
 let selfJids = new Set(); // המספר שלך (בפורמט טלפון ובפורמט LID)
@@ -495,7 +495,7 @@ http
       pairPhone = phone;
       pairingCode = null;
       pairingSock = null;
-      if (sock?.authState?.creds?.registered) return back("כבר מחובר");
+      if (connected) return back("כבר מחובר");
       // פותחים חיבור חדש ונקי. הקוד ייווצר בו תוך כמה שניות
       console.log("📞 התבקש קוד חיבור, פותח חיבור חדש");
       try {
