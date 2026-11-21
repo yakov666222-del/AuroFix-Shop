@@ -334,7 +334,7 @@ async function onCloudMessage(m) {
   }
   cloud.markRead(m.id);
   const text = m.text?.body || m.image?.caption || "";
-  const images = m.type === "image" ? [await cloud.downloadImage(m.image.id).catch(() => null)].filter(Boolean) : [];
+  const images = m.type === "image" ? [await cloud.downloadImage(m.image.id, m.image.url).catch(() => null)].filter(Boolean) : [];
   await handleOwner(text, images, m.type === "audio");
 }
 
@@ -576,7 +576,7 @@ http
       const raw = Buffer.concat(chunks);
       res.writeHead(200);
       res.end("ok"); // עונים מיד, ומטפלים ברקע
-      if (!cloud.cloudEnabled() || !cloud.validSignature(raw, req.headers["x-hub-signature-256"])) return;
+      if (!cloud.cloudEnabled() || !cloud.validSignature(raw, req.headers)) return;
       let body;
       try {
         body = JSON.parse(raw.toString("utf8"));
@@ -677,6 +677,8 @@ http
     }
     if (req.method === "POST" && url.pathname === "/cloud") {
       const f = await readBody(req);
+      const prov = f.get("provider");
+      if (prov === "kapso" || prov === "meta") cloud.cfg.provider = prov;
       for (const [k, name] of [["token", "token"], ["phoneNumberId", "phone_number_id"], ["ownerPhone", "owner_phone"], ["appSecret", "app_secret"]]) {
         const v = (f.get(name) || "").trim();
         if (v) cloud.cfg[k] = k === "ownerPhone" ? cloud.normPhone(v) : v;
@@ -701,10 +703,12 @@ http
 <p><b>כתובת Callback (להעתיק ל-Meta):</b></p><div class="code" style="font-size:15px;letter-spacing:0">https://${host}/webhook</div>
 <p><b>Verify token (להעתיק ל-Meta):</b></p><div class="code" style="font-size:15px;letter-spacing:0">${c.verifyToken}</div></div>
 <div class="card"><form method="post" action="/cloud${self}">
-<p>Access token ${c.token ? "(נשמר ✓, אפשר להחליף)" : ""}</p><input name="token" autocomplete="off">
+<p>דרך החיבור</p><select name="provider" style="font-size:18px;width:100%;padding:10px;border-radius:10px">
+<option value="kapso" ${c.provider === "kapso" ? "selected" : ""}>Kapso</option><option value="meta" ${c.provider === "meta" ? "selected" : ""}>Meta ישירות</option></select>
+<p>${c.provider === "meta" ? "Access token" : "Kapso API key"} ${c.token ? "(נשמר ✓, אפשר להחליף)" : ""}</p><input name="token" autocomplete="off">
 <p>Phone number ID ${c.phoneNumberId ? `(${c.phoneNumberId})` : ""}</p><input name="phone_number_id" inputmode="numeric" autocomplete="off">
 <p>המספר שלך (שממנו תכתוב ליועץ) ${c.ownerPhone ? `(${c.ownerPhone})` : ""}</p><input name="owner_phone" type="tel" placeholder="0501234567">
-<p>App secret (רשות, לאבטחה) ${c.appSecret ? "(נשמר ✓)" : ""}</p><input name="app_secret" autocomplete="off">
+<p>${c.provider === "meta" ? "App secret" : "Webhook secret"} (רשות, לאבטחה) ${c.appSecret ? "(נשמר ✓)" : ""}</p><input name="app_secret" autocomplete="off">
 <button>שמור</button></form></div>`)
       );
     }

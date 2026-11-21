@@ -1,0 +1,27 @@
+// בדיקת Kapso: שרת מדומה + webhook חתום
+import http from "node:http";
+import crypto from "node:crypto";
+import { spawn } from "node:child_process";
+const sent = []; const hdrs = [];
+http.createServer((req, res) => { let b = ""; req.on("data", (c) => (b += c)).on("end", () => { if (req.method === "POST") { sent.push(JSON.parse(b)); hdrs.push(req.headers["x-api-key"]); } res.writeHead(200, { "Content-Type": "application/json" }); res.end("{}"); }); }).listen(3865);
+const env = { ...process.env, DATA_DIR: "/tmp/wa-kapso-" + Date.now(), PORT: "3866", QR_PAGE_KEY: "k", WA_MODE: "cloud", GRAPH_BASE: "http://127.0.0.1:3865", GEMINI_API_KEY: "AIza-test-not-real-0000000000000000" };
+const p = spawn("node", ["src/index.js"], { env, stdio: ["ignore", "pipe", "pipe"] });
+let log = ""; p.stdout.on("data", (d) => (log += d)); p.stderr.on("data", (d) => (log += d));
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+await sleep(3000);
+const B = "http://127.0.0.1:3866";
+await fetch(B + "/cloud?key=k", { method: "POST", body: new URLSearchParams({ provider: "kapso", token: "KAPSO_KEY", phone_number_id: "555", owner_phone: "0524308335", app_secret: "whsec" }), redirect: "manual" });
+await sleep(400);
+console.log("opening sent:", sent.length, "api key header:", hdrs[0]);
+const payload = (from, body, id) => JSON.stringify({ message: { id, timestamp: String(Math.floor(Date.now() / 1000)), type: "text", from, text: { body }, kapso: { direction: "inbound", content: body } }, conversation: { phone_number: from, phone_number_id: "555" }, phone_number_id: "555" });
+const sig = (raw) => crypto.createHmac("sha256", "whsec").update(raw).digest("hex");
+const good = payload("972524308335", "!סטטוס", "w1");
+await fetch(B + "/webhook", { method: "POST", headers: { "X-Webhook-Signature": sig(good) }, body: good });
+const forged = payload("972524308335", "!כבה", "w2");
+await fetch(B + "/webhook", { method: "POST", headers: { "X-Webhook-Signature": "bad" }, body: forged });
+const batch = JSON.stringify({ type: "whatsapp.message.received", batch: true, data: [JSON.parse(payload("972524308335", "!עזרה", "w3"))] });
+await fetch(B + "/webhook", { method: "POST", headers: { "X-Webhook-Signature": sig(batch) }, body: batch });
+await sleep(800);
+const texts = sent.filter((x) => x.type === "text").map((x) => x.text.body.split("\n")[0]);
+console.log("replies:", texts);
+p.kill(); process.exit(0);

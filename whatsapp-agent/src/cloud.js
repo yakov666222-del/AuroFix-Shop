@@ -1,14 +1,16 @@
-// חיבור לווטסאפ הרשמי של Meta (WhatsApp Cloud API).
+// חיבור לווטסאפ הרשמי: ישירות דרך Meta (WhatsApp Cloud API) או דרך Kapso (שמתווכת מול Meta).
 // ליועץ יש מספר ווטסאפ משלו, והבעלים כותב לו כמו לכל איש קשר.
 import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
 import { DATA_DIR } from "./store.js";
 
-const GRAPH = process.env.GRAPH_BASE || `https://graph.facebook.com/${process.env.GRAPH_VERSION || "v23.0"}`;
+const META_BASE = `https://graph.facebook.com/${process.env.GRAPH_VERSION || "v23.0"}`;
+const KAPSO_BASE = "https://api.kapso.ai/meta/whatsapp/v24.0";
 const FILE = path.join(DATA_DIR, "meta.json");
 
-// { token, phoneNumberId, ownerPhone, appSecret, verifyToken }
+// { provider: "meta"|"kapso", token, phoneNumberId, ownerPhone, appSecret, verifyToken }
+// ב-Kapso: token = מפתח ה-API של Kapso, appSecret = ה-webhook secret
 export const cfg = (() => {
   try {
     return JSON.parse(fs.readFileSync(FILE, "utf8"));
@@ -31,10 +33,14 @@ export function normPhone(p) {
   return d;
 }
 
+export const isKapso = () => cfg.provider === "kapso";
+const base = () => process.env.GRAPH_BASE || (isKapso() ? KAPSO_BASE : META_BASE);
+const authHeaders = () => (isKapso() ? { "X-API-Key": cfg.token } : { Authorization: `Bearer ${cfg.token}` });
+
 async function graph(pathname, opts = {}) {
-  const res = await fetch(`${GRAPH}/${pathname}`, {
+  const res = await fetch(`${base()}/${pathname}`, {
     ...opts,
-    headers: { Authorization: `Bearer ${cfg.token}`, "Content-Type": "application/json", ...(opts.headers || {}) },
+    headers: { ...authHeaders(), "Content-Type": "application/json", ...(opts.headers || {}) },
     signal: AbortSignal.timeout(20000),
   });
   const data = await res.json().catch(() => ({}));
@@ -72,9 +78,18 @@ export async function markRead(messageId) {
   }).catch(() => {});
 }
 
-export async function downloadImage(mediaId) {
-  const meta = await graph(mediaId);
-  const res = await fetch(meta.url, { headers: { Authorization: `Bearer ${cfg.token}` }, signal: AbortSignal.timeout(30000) });
+export async function downloadImage(mediaId, directUrl) {
+  let url = directUrl;
+  let mime = "image/jpeg";
+  if (!url) {
+    const meta = await graph(mediaId);
+    url = meta.url;
+    mime = meta.mime_type || mime;
+  }
+  const res = await fetch(url, { headers: authHeaders(), signal: AbortSignal.timeout(30000) });
+  if (!res.ok) return null;
+  mime = res.headers.get("content-type")?.split(";")[0] || mime;
+  const meta = { mime_type: mime };
   const buf = Buffer.from(await res.arrayBuffer());
   if (buf.length > 4.5 * 1024 * 1024) return null;
   const type = ["image/jpeg", "image/png", "image/webp", "image/gif"].includes(meta.mime_type) ? meta.mime_type : "image/jpeg";
@@ -82,16 +97,23 @@ export async function downloadImage(mediaId) {
 }
 
 // אימות שההודעה באמת הגיעה מ-Meta (אם הוגדר App Secret)
-export function validSignature(rawBody, header) {
+export function validSignature(rawBody, headers) {
   if (!cfg.appSecret) return true;
-  if (!header?.startsWith("sha256=")) return false;
   const expected = crypto.createHmac("sha256", cfg.appSecret).update(rawBody).digest("hex");
-  const got = header.slice(7);
+  let got;
+  if (isKapso()) {
+    got = String(headers["x-webhook-signature"] || "");
+  } else {
+    const header = String(headers["x-hub-signature-256"] || "");
+    if (!header.startsWith("sha256=")) return false;
+    got = header.slice(7);
+  }
   return got.length === expected.length && crypto.timingSafeEqual(Buffer.from(got), Buffer.from(expected));
 }
 
 // מחלץ את ההודעות מגוף ה-webhook
 export function extractMessages(body) {
+  if (isKapso()) return extractKapso(body);
   const out = [];
   for (const entry of body?.entry ?? []) {
     for (const change of entry.changes ?? []) {
@@ -99,6 +121,24 @@ export function extractMessages(body) {
       if (v.metadata?.phone_number_id && v.metadata.phone_number_id !== cfg.phoneNumberId) continue;
       for (const m of v.messages ?? []) out.push(m);
     }
+  }
+  return out;
+}
+
+// Kapso שולחת פורמט משלה (v2). ממירים לצורה של Meta כדי שאותו קוד יטפל בשניהם
+function extractKapso(body) {
+  const items = body?.batch && Array.isArray(body.data) ? body.data : [body];
+  const out = [];
+  for (const it of items) {
+    const m = it?.message;
+    if (!m || m.kapso?.direction === "outbound") continue;
+    if (it.phone_number_id && cfg.phoneNumberId && String(it.phone_number_id) !== String(cfg.phoneNumberId)) continue;
+    const from = m.from || it.conversation?.phone_number || "";
+    const msg = { id: m.id, from, timestamp: m.timestamp, type: m.type };
+    if (m.type === "text") msg.text = { body: m.text?.body || m.kapso?.content || "" };
+    if (m.type === "image") msg.image = { id: m.image?.id, caption: m.image?.caption || "", url: m.kapso?.media_url };
+    if (m.type === "audio") msg.audio = {};
+    out.push(msg);
   }
   return out;
 }
