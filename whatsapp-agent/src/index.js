@@ -35,6 +35,7 @@ let selfJids = new Set(); // המספר שלך (בפורמט טלפון ובפו
 let selfJid = null;
 let latestQr = null;
 let pairingCode = null;
+let pairPhone = null; // מספר שביקשו עבורו קוד חיבור
 let connected = false;
 let retries = 0;
 const startedAt = Math.floor(Date.now() / 1000);
@@ -363,7 +364,7 @@ async function connect() {
     auth: state,
     version,
     logger,
-    browser: Browsers.macOS("Desktop"),
+    browser: Browsers.macOS("Chrome"), // חיבור בקוד עובד רק כשהמכשיר מזוהה כדפדפן
     markOnlineOnConnect: false, // כדי שתמשיך לקבל התראות בטלפון
     syncFullHistory: false,
   });
@@ -373,15 +374,28 @@ async function connect() {
   sock.ev.on("connection.update", async ({ connection, lastDisconnect, qr }) => {
     if (qr) {
       latestQr = qr;
-      console.log("\n📱 סרוק את הקוד: ווטסאפ > הגדרות > מכשירים מקושרים > קישור מכשיר");
-      qrcodeTerminal.generate(qr, { small: true });
-      console.log(`(או פתח בדפדפן: http://localhost:${PORT})\n`);
+      if (process.stdout.isTTY) {
+        console.log("\n📱 סרוק את הקוד: ווטסאפ > הגדרות > מכשירים מקושרים > קישור מכשיר");
+        qrcodeTerminal.generate(qr, { small: true });
+        console.log(`(או פתח בדפדפן: http://localhost:${PORT})\n`);
+      }
+      // ביקשו חיבור בקוד: מבקשים קוד מהחיבור הנוכחי (כל חיבור חדש = קוד חדש)
+      if (pairPhone && !pairingCode && !sock.authState.creds.registered) {
+        try {
+          const code = await sock.requestPairingCode(pairPhone);
+          pairingCode = code?.match(/.{1,4}/g)?.join("-") || code;
+          console.log("🔑 נוצר קוד חיבור חדש");
+        } catch (e) {
+          console.log("⚠️ בקשת קוד חיבור נכשלה:", e.message);
+        }
+      }
     }
     if (connection === "open") {
       connected = true;
       retries = 0;
       latestQr = null;
       pairingCode = null;
+      pairPhone = null;
       selfJid = jidNormalizedUser(sock.user.id);
       selfJids = new Set([selfJid, sock.user.lid && jidNormalizedUser(sock.user.lid)].filter(Boolean));
       console.log(`✅ מחובר כ-${selfJid}`);
@@ -394,7 +408,15 @@ async function connect() {
     }
     if (connection === "close") {
       connected = false;
+      pairingCode = null; // הקוד הישן כבר לא תקף. בחיבור הבא ייווצר חדש
+      latestQr = null;
       const code = lastDisconnect?.error?.output?.statusCode;
+      console.log(`🔌 החיבור נסגר (קוד ${code ?? "?"})`);
+      if (code === DisconnectReason.restartRequired) {
+        // קורה מיד אחרי חיבור מוצלח בקוד/QR: מתחברים מחדש מיד
+        setTimeout(connect, 500);
+        return;
+      }
       if (code === DisconnectReason.loggedOut) {
         console.log("🚪 התנתקת מהווטסאפ. מתחיל חיבור חדש...");
         fs.rmSync(path.join(DATA_DIR, "auth"), { recursive: true, force: true });
@@ -456,12 +478,15 @@ http
     if (req.method === "POST" && url.pathname === "/pair") {
       let phone = ((await readBody(req)).get("phone") || "").replace(/\D/g, "");
       if (phone.startsWith("0")) phone = "972" + phone.slice(1);
-      if (phone.length < 10) return back("מספר הטלפון לא נראה תקין");
+      if (phone.length < 11 || phone.length > 15) return back("מספר הטלפון לא נראה תקין. כתוב למשל 0501234567");
+      pairPhone = phone;
+      pairingCode = null;
+      if (sock.authState.creds.registered) return back("כבר מחובר");
       try {
         const code = await sock.requestPairingCode(phone);
         pairingCode = code?.match(/.{1,4}/g)?.join("-") || code;
-      } catch (e) {
-        return back("לא הצלחתי לקבל קוד, נסה שוב בעוד דקה");
+      } catch {
+        // החיבור הנוכחי לא מוכן: קוד ייווצר אוטומטית בחיבור הבא
       }
       return back();
     }
@@ -486,14 +511,20 @@ http
     }
     if (pairingCode) {
       body += `<div class="card"><h2>שלב 2 מתוך 2: הקלד את הקוד בווטסאפ</h2><div class="code">${pairingCode}</div>
-<ol><li>פתח את <b>ווטסאפ</b></li><li><b>הגדרות</b> (באייפון: למטה מימין · באנדרואיד: ⋮ למעלה)</li><li><b>מכשירים מקושרים</b> › <b>קישור מכשיר</b></li><li>למטה לחץ <b>"קישור באמצעות מספר טלפון"</b></li><li>הקלד את הקוד שלמעלה</li></ol>
-<small>הדף יתעדכן לבד כשזה יתחבר.</small></div><script>setTimeout(()=>location.reload(),8000)</script>`;
+<ol><li>פתח את <b>ווטסאפ</b></li><li><b>הגדרות</b> › <b>מכשירים מקושרים</b> › <b>קישור מכשיר</b></li><li>למטה לחץ <b>"קישור באמצעות מספר טלפון"</b></li><li>הקלד את הקוד שלמעלה, מהר (תוך דקה)</li></ol>
+<small>הקוד מתחלף לפעמים. תמיד השתמש בקוד שמופיע כאן עכשיו. הדף מתעדכן לבד.</small>
+<form method="post" action="/pair${self}"><input type="hidden" name="phone" value="${pairPhone}"><button style="background:#888">לא עובד? קבל קוד חדש</button></form></div>
+<script>setTimeout(()=>location.reload(),10000)</script>`;
+      return res.end(page(body));
+    }
+    if (pairPhone) {
+      body += `<div class="card"><h2>מכין קוד...</h2><p>עוד כמה שניות.</p></div><script>setTimeout(()=>location.reload(),3000)</script>`;
       return res.end(page(body));
     }
     body += `<div class="card"><h2>שלב 2 מתוך 2: חיבור לווטסאפ</h2><p>הכנס את מספר הטלפון שיש עליו את הווטסאפ שלך:</p>
 <form method="post" action="/pair${self}"><input name="phone" type="tel" placeholder="050-1234567" required><button>קבל קוד חיבור</button></form></div>`;
     if (latestQr)
-      body += `<div class="card"><p><small>יש לך מחשב או טלפון נוסף? אפשר גם לסרוק:</small></p><img style="width:100%" src="${await QRCode.toDataURL(latestQr, { width: 320 })}"></div><script>setTimeout(()=>location.reload(),20000)</script>`;
+      body += `<div class="card"><p><small>יש לך מחשב או טלפון נוסף? אפשר גם לסרוק:</small></p><img style="width:100%" src="${await QRCode.toDataURL(latestQr, { width: 320 })}"><small>הריבוע מתחלף כל כמה שניות. <a href="">רענן</a></small></div>`;
     else body += `<p><small>מתחבר לווטסאפ...</small></p><script>setTimeout(()=>location.reload(),3000)</script>`;
     res.end(page(body));
   })
