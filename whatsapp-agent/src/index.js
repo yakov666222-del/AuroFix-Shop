@@ -574,6 +574,11 @@ http
       for (const m of cloud.extractMessages(body)) onCloudMessage(m).catch((e) => logger.error(e, "cloud message"));
       return;
     }
+    const icon = url.pathname.match(/^\/(icon-(180|192|512)\.png|icon\.svg)$/);
+    if (icon) {
+      res.writeHead(200, { "Content-Type": icon[1].endsWith(".svg") ? "image/svg+xml" : "image/png", "Cache-Control": "public, max-age=86400" });
+      return res.end(fs.readFileSync(new URL(`../assets/${icon[1]}`, import.meta.url)));
+    }
     if (url.pathname === "/manifest.json") {
       res.writeHead(200, { "Content-Type": "application/manifest+json" });
       return res.end(MANIFEST);

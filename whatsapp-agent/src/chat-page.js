@@ -8,8 +8,10 @@ export const CHAT_HTML = `<!doctype html>
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="היועץ">
 <meta name="theme-color" content="#1f7a5a">
-<title>היועץ</title>
+<title>היועץ של YakovPhone</title>
 <link rel="manifest" href="/manifest.json">
+<link rel="apple-touch-icon" href="/icon-180.png">
+<link rel="icon" href="/icon.svg" type="image/svg+xml">
 <style>
   :root { --bg:#eef1ee; --surface:#fff; --fg:#1b2420; --muted:#62706a; --line:#d5dcd7; --accent:#1f7a5a; --accent-fg:#fff; --user:#d9f0e3; --bot:#fff; --warn:#9a5b00; }
   @media (prefers-color-scheme: dark) { :root { --bg:#0f1613; --surface:#17211c; --fg:#e7efe9; --muted:#93a39a; --line:#2a3832; --accent:#3fb88a; --accent-fg:#07130d; --user:#1d3a2d; --bot:#1a2520; --warn:#e0a64a; } }
@@ -20,6 +22,8 @@ export const CHAT_HTML = `<!doctype html>
          padding: env(safe-area-inset-top) max(16px, env(safe-area-inset-right)) 0 max(16px, env(safe-area-inset-left)); }
   header { padding: 12px 0 10px; border-bottom: 1px solid var(--line); display: flex; justify-content: space-between; align-items: center; gap: 8px; }
   h1 { font-size: 1.1rem; margin: 0; }
+  .brand { display: flex; align-items: center; gap: 10px; }
+  .brand img { border-radius: 10px; }
   .sub { color: var(--muted); font-size: .8rem; }
   #thread { flex: 1; min-height: 0; overflow-y: auto; padding: 14px 0; display: flex; flex-direction: column; gap: 8px; }
   .msg { max-width: 86%; padding: 8px 12px; border-radius: 14px; white-space: pre-wrap; overflow-wrap: anywhere; }
@@ -42,7 +46,7 @@ export const CHAT_HTML = `<!doctype html>
 <body>
 <div class="app">
   <header>
-    <div><h1>🤖 המלווה העסקי</h1><div class="sub">כתוב לו כמו בווטסאפ</div></div>
+    <div class="brand"><img src="/icon.svg" alt="" width="40" height="40"><div><h1>היועץ של YakovPhone</h1><div class="sub">המלווה העסקי שלך</div></div></div>
     <button class="btn attach" id="bell" hidden>🔔 הפעל התראות</button>
   </header>
   <div id="thread" aria-live="polite"></div>
@@ -184,8 +188,12 @@ export const MANIFEST = JSON.stringify({
   scope: "/",
   dir: "rtl",
   lang: "he",
-  background_color: "#eef1ee",
+  background_color: "#0d1311",
   theme_color: "#1f7a5a",
+  icons: [
+    { src: "/icon-192.png", sizes: "192x192", type: "image/png" },
+    { src: "/icon-512.png", sizes: "512x512", type: "image/png" },
+  ],
 });
 
 // מקבל התראות מהשרת ומציג אותן
@@ -193,7 +201,7 @@ export const SW_JS = `
 self.addEventListener("push", (e) => {
   let d = {};
   try { d = e.data.json(); } catch { d = { title: "היועץ", body: e.data ? e.data.text() : "" }; }
-  e.waitUntil(self.registration.showNotification(d.title || "היועץ", { body: d.body || "", data: { url: d.url || "/" }, lang: "he", dir: "rtl" }));
+  e.waitUntil(self.registration.showNotification(d.title || "היועץ", { body: d.body || "", icon: "/icon-192.png", badge: "/icon-192.png", data: { url: d.url || "/" }, lang: "he", dir: "rtl" }));
 });
 self.addEventListener("notificationclick", (e) => {
   e.notification.close();
