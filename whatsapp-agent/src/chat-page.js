@@ -41,7 +41,28 @@ export const CHAT_HTML = `<!doctype html>
   .attach { background: var(--surface); border: 1px solid var(--line); color: var(--fg); }
   .send:disabled { opacity: .5; }
   #preview { font-size: .8rem; color: var(--muted); padding-bottom: 4px; }
+
+  /* מצב "חלק מהמערכת" (?embed=1): הצבעים, הגופן והצורות של מערכת YakovPhone */
+  html.embed {
+    --bg: transparent; --surface: hsl(222 30% 18%); --fg: hsl(40 30% 94%); --muted: hsl(220 15% 70%);
+    --line: hsl(40 35% 30% / .55); --accent: hsl(41 62% 69%); --accent-fg: hsl(40 60% 8%);
+    --user: hsl(41 62% 69%); --bot: hsl(222 30% 18%); --warn: hsl(41 80% 62%);
+  }
+  html.embed body { background: transparent; font-family: Heebo, "Segoe UI", system-ui, sans-serif; }
+  html.embed header { display: none; }
+  html.embed .app { padding: 0 14px; max-width: none; }
+  html.embed #thread { padding-top: 16px; }
+  html.embed .msg { border-radius: 16px; padding: 10px 14px; line-height: 1.6; }
+  html.embed .bot { border-color: var(--line); border-top-right-radius: 6px; }
+  html.embed .user { color: var(--accent-fg); border-top-left-radius: 6px; }
+  html.embed .chips button { border-color: hsl(41 62% 69% / .45); background: transparent; border-radius: 999px; padding: 8px 14px; }
+  html.embed form { border-top-color: var(--line); padding: 12px 0 14px; gap: 10px; align-items: stretch; }
+  html.embed textarea { background: hsl(222 47% 8% / .6); border-color: hsl(41 62% 69% / .35); border-radius: 16px; padding: 12px 14px; min-height: 54px; }
+  html.embed .send { border-radius: 16px; min-width: 56px; font-size: 0; position: relative; }
+  html.embed .send::after { content: "➤"; font-size: 20px; display: inline-block; transform: scaleX(-1); }
+  html.embed .attach { background: transparent; border-color: hsl(41 62% 69% / .35); border-radius: 16px; }
 </style>
+<script>if (/[?&]embed=1/.test(location.search)) document.documentElement.classList.add("embed");</script>
 </head>
 <body>
 <div class="app">
