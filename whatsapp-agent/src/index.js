@@ -472,8 +472,13 @@ function readBody(req) {
 
 http
   .createServer(async (req, res) => {
-    const secret = process.env.QR_PAGE_KEY;
     const url = new URL(req.url, "http://x");
+    // בדיקת חיים לעבודה המתוזמנת (שומרת את השרת ער). בלי מידע רגיש
+    if (url.pathname === "/health") {
+      res.writeHead(200, { "Content-Type": "text/plain" });
+      return res.end(connected ? "ok connected" : "ok");
+    }
+    const secret = process.env.QR_PAGE_KEY;
     if (secret && url.searchParams.get("key") !== secret) {
       res.writeHead(403, { "Content-Type": "text/plain; charset=utf-8" });
       return res.end("אין גישה");
