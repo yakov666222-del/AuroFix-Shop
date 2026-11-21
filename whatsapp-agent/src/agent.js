@@ -5,6 +5,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { CUSTOMER_TOOLS, OWNER_TOOLS, runTool } from "./tools.js";
 import { DATA_DIR, getHistory, appendHistory, memory } from "./store.js";
 import { runGemini } from "./gemini.js";
+import { checklistBlock } from "./checklist.js";
 
 // המפתחות נלקחים מ-.env או מהקבצים בתיקיית data (שנשמרים דרך עמוד ההגדרה)
 function readKey(envName, file) {
@@ -110,6 +111,15 @@ const OWNER_SYSTEM = `# הנחיות הסוכן: מלווה עסקי למעבד�
 - אם הפריט לא נמצא או שהכמות לא הגיונית, שואל ולא מנחש. אם יש כמה פריטים דומים, שואל לאיזה התכוון.
 - אפשר גם לבדוק תיקונים (find_repairs) ולתת סיכום של המעבדה (lab_summary).
 
+## רשימת הפתיחה: אתה הנודניק של הבעלים
+יש רשימת פתיחה של המעבדה (מופיעה למטה). התפקיד שלך לוודא שכל הסעיפים נסגרים, ולבנות כל סעיף יחד איתו:
+- אל תחכה שישאל. בסוף כל שיחה שלא דחופה, הזכר בשורה אחת את הסעיף הפתוח הבא והצע "בוא נסגור את זה עכשיו, זה לוקח 5 דקות".
+- עבוד על סעיף אחד בכל פעם: שאלה אחת, החלטה, שמירה עם update_checklist (status done ו-value עם ההחלטה המלאה).
+- מחירון: לפני שאתה ממליץ, עשה סקר שוק עם web_search: מה מעבדות בישראל גובות על אותו תיקון (מסך/סוללה/שקע לדגמים נפוצים), ובדוק את עלות החלק במלאי (search_inventory). המלץ על מחיר שמכסה חלק + זמן עבודה + רווח, וממוקם ביחס לשוק. הצג טבלה קצרה בשורות: דגם | עלות חלק | טווח בשוק | מחיר מומלץ.
+- אחריות: הצע ניסוח קצר וברור שאפשר להדפיס על הקבלה.
+- שעות/כתובת/טלפון: שאל ושמור. לעולם אל תמציא אותם.
+- אם הבעלים דוחה ("אחר כך"), כבד את זה, אבל תחזור לזה בהזדמנות הבאה. אתה נודניק חביב, לא מעצבן.
+
 ## עוד דברים שאתה יכול לעשות בווטסאפ
 - זיכרון: כשהוא מספר משהו שכדאי לזכור (שלב העסק, תיק פתוח או לא, שכיר או לא, מחזור, יעדים, ספקים, החלטות), שמור עם remember בלי לשאול. השתמש במה שאתה זוכר כדי שלא יצטרך לחזור על עצמו.
 - תזכורות: set_reminder (למשל לדיווח, למקדמות, להזמנת חלקים). כשמגיע מועד חשוב, הצע לקבוע תזכורת.
@@ -184,7 +194,7 @@ export async function runAgent(mode, key, text, images, ctx) {
     const historyUser = (images.length ? `[${images.length} תמונות] ` : "") + (text || "");
     const { text: out, sources } = await runGemini({
       apiKey: geminiKey(),
-      system: isOwner ? `${OWNER_SYSTEM}\n\n${memoryBlock()}` : CUSTOMER_SYSTEM,
+      system: isOwner ? `${OWNER_SYSTEM}\n\n${memoryBlock()}\n\n${checklistBlock()}` : CUSTOMER_SYSTEM,
       tools: isOwner ? OWNER_TOOLS : CUSTOMER_TOOLS,
       history: getHistory(key),
       text: `${nowLine()}\n${text || "(נשלחה תמונה)"}`,
@@ -203,7 +213,7 @@ export async function runAgent(mode, key, text, images, ctx) {
   const system = isOwner
     ? [
         { type: "text", text: OWNER_SYSTEM, cache_control: { type: "ephemeral" } },
-        { type: "text", text: memoryBlock() },
+        { type: "text", text: `${memoryBlock()}\n\n${checklistBlock()}` },
       ]
     : CUSTOMER_SYSTEM;
 

@@ -21,7 +21,9 @@ import * as lab from "./lab.js";
 import { DATA_DIR, appendHistory, chats, clearHistory, convo, logMessage, memory, reminders, saveReminders, saveSettings, settings } from "./store.js";
 import { findChat, pendingChanges, phoneToJid } from "./tools.js";
 import * as cloud from "./cloud.js";
-import { CHAT_HTML } from "./chat-page.js";
+import { CHAT_HTML, MANIFEST, SW_JS } from "./chat-page.js";
+import * as push from "./push.js";
+import { openItems } from "./checklist.js";
 
 const logger = pino({ level: process.env.LOG_LEVEL || "warn" });
 const TAKEOVER_MIN = Number(process.env.TAKEOVER_MINUTES || 60);
@@ -79,6 +81,8 @@ async function notifyOwner(text) {
   }
   webInbox.push({ id: Date.now() + Math.random(), text, ts: Date.now() });
   saveInbox();
+  // התראה קופצת לטלפון
+  await push.sendPush(text, `/chat?key=${encodeURIComponent(process.env.QR_PAGE_KEY || "")}`).catch(() => {});
 }
 
 // ---------- עזרים ----------
@@ -258,6 +262,26 @@ async function maybeWeeklySummary() {
   }
 }
 
+// ---------- נודניק: תזכורת לסעיף הבא ברשימת הפתיחה ----------
+async function maybeNag() {
+  if (process.env.NAG === "false" || !getApiKey() || !openItems().length) return;
+  const now = israelNow();
+  const slot = [10, 17].find((h) => now.hour === h);
+  if (slot === undefined || ["Fri", "Sat"].includes(now.weekday)) return;
+  const key = `${now.date}-${slot}`;
+  if (settings.lastNag === key) return;
+  settings.lastNag = key;
+  saveSettings();
+  const prompt =
+    "[הודעה אוטומטית, לא מהבעלים] הגיע זמן הנודניק. כתוב לבעלים הודעה קצרה (2-4 שורות), חמה אבל נחושה, על הסעיף הפתוח הבא ברשימת הפתיחה: מה זה, למה זה חשוב, ושאלה אחת שמתחילה לסגור אותו עכשיו. אם זה המחירון, הצע להתחיל בסקר שוק על החלפת מסך/סוללה לדגם הכי נפוץ.";
+  try {
+    const reply = await runAgent("owner", OWNER_KEY, prompt, [], { sendText, notifyOwner, chatJid: selfJid || OWNER_KEY });
+    if (reply) await notifyOwner(`📌 ${reply}`);
+  } catch (e) {
+    logger.error(e, "nag failed");
+  }
+}
+
 // ---------- טיפול בהודעות ----------
 async function collectImage(m) {
   const img = innerMsg(m).imageMessage;
@@ -406,6 +430,7 @@ setInterval(async () => {
   }
   if (due.length) saveReminders();
   maybeWeeklySummary();
+  maybeNag();
 }, 20_000);
 
 // ---------- חיבור לווטסאפ ----------
@@ -549,6 +574,14 @@ http
       for (const m of cloud.extractMessages(body)) onCloudMessage(m).catch((e) => logger.error(e, "cloud message"));
       return;
     }
+    if (url.pathname === "/manifest.json") {
+      res.writeHead(200, { "Content-Type": "application/manifest+json" });
+      return res.end(MANIFEST);
+    }
+    if (url.pathname === "/sw.js") {
+      res.writeHead(200, { "Content-Type": "text/javascript", "Service-Worker-Allowed": "/" });
+      return res.end(SW_JS);
+    }
     if (url.pathname === "/health") {
       res.writeHead(200, { "Content-Type": "text/plain" });
       return res.end(connected ? "ok connected" : "ok");
@@ -573,6 +606,21 @@ http
       const h = (convo[OWNER_KEY] ?? []).slice(-40).map((m) => ({ role: m.role, text: m.content }));
       res.writeHead(200, { "Content-Type": "application/json" });
       return res.end(JSON.stringify({ history: h, opening: OPENING }));
+    }
+    if (url.pathname === "/chat/push-key" && req.method === "GET") {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      return res.end(JSON.stringify({ key: push.publicKey, subscribed: push.hasSubscribers() }));
+    }
+    if (url.pathname === "/chat/subscribe" && req.method === "POST") {
+      const chunks = [];
+      for await (const c of req) chunks.push(c);
+      let ok = false;
+      try {
+        ok = push.addSubscription(JSON.parse(Buffer.concat(chunks).toString("utf8")));
+      } catch {}
+      if (ok) push.sendPush("✅ ההתראות פועלות. מעכשיו אני יכול להציק לך 😉").catch(() => {});
+      res.writeHead(ok ? 200 : 400, { "Content-Type": "application/json" });
+      return res.end(JSON.stringify({ ok }));
     }
     if (url.pathname === "/chat/inbox" && req.method === "GET") {
       const items = webInbox.splice(0);

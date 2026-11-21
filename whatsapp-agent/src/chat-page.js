@@ -9,6 +9,7 @@ export const CHAT_HTML = `<!doctype html>
 <meta name="apple-mobile-web-app-title" content="היועץ">
 <meta name="theme-color" content="#1f7a5a">
 <title>היועץ</title>
+<link rel="manifest" href="/manifest.json">
 <style>
   :root { --bg:#eef1ee; --surface:#fff; --fg:#1b2420; --muted:#62706a; --line:#d5dcd7; --accent:#1f7a5a; --accent-fg:#fff; --user:#d9f0e3; --bot:#fff; --warn:#9a5b00; }
   @media (prefers-color-scheme: dark) { :root { --bg:#0f1613; --surface:#17211c; --fg:#e7efe9; --muted:#93a39a; --line:#2a3832; --accent:#3fb88a; --accent-fg:#07130d; --user:#1d3a2d; --bot:#1a2520; --warn:#e0a64a; } }
@@ -42,6 +43,7 @@ export const CHAT_HTML = `<!doctype html>
 <div class="app">
   <header>
     <div><h1>🤖 המלווה העסקי</h1><div class="sub">כתוב לו כמו בווטסאפ</div></div>
+    <button class="btn attach" id="bell" hidden>🔔 הפעל התראות</button>
   </header>
   <div id="thread" aria-live="polite"></div>
   <div class="chips" id="chips"></div>
@@ -138,9 +140,66 @@ async function send(text) {
   } finally { busy = false; sendBtn.disabled = false; }
 }
 
+// ---------- התראות לטלפון ----------
+const bell = document.getElementById("bell");
+const standalone = window.matchMedia("(display-mode: standalone)").matches || navigator.standalone;
+async function setupPush() {
+  if (!("serviceWorker" in navigator)) return;
+  const reg = await navigator.serviceWorker.register("/sw.js", { scope: "/" }).catch(() => null);
+  if (!reg || !("PushManager" in window)) {
+    if (/iPhone|iPad/.test(navigator.userAgent) && !standalone) {
+      bell.hidden = false; bell.textContent = "🔔 התראות";
+      bell.onclick = () => bubble("note", "כדי לקבל התראות: שתף ← הוספה למסך הבית, ואז פתח את 'היועץ' מהאייקון ולחץ שוב על 🔔.");
+    }
+    return;
+  }
+  const existing = await reg.pushManager.getSubscription();
+  if (existing && Notification.permission === "granted") return;
+  bell.hidden = false;
+  bell.onclick = async () => {
+    try {
+      if ((await Notification.requestPermission()) !== "granted") { bubble("note", "ההתראות לא אושרו. אפשר לאשר בהגדרות הטלפון."); return; }
+      const { key } = await (await fetch(q("/chat/push-key"))).json();
+      const pad = "=".repeat((4 - key.length % 4) % 4), raw = atob((key + pad).replace(/-/g, "+").replace(/_/g, "/"));
+      const sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: Uint8Array.from(raw, (c) => c.charCodeAt(0)) });
+      const r = await fetch(q("/chat/subscribe"), { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(sub) });
+      if (r.ok) { bell.hidden = true; bubble("note", "✅ ההתראות הופעלו."); }
+    } catch (e) { bubble("note", "לא הצלחתי להפעיל התראות: " + e.message); }
+  };
+}
+setupPush();
+
 document.getElementById("form").onsubmit = (e) => { e.preventDefault(); const t = input.value; input.value = ""; input.style.height = "auto"; send(t); };
 input.addEventListener("input", () => { input.style.height = "auto"; input.style.height = Math.min(input.scrollHeight, 140) + "px"; });
 load();
 </script>
 </body>
 </html>`;
+
+// מאפשר לשמור את הצ'אט במסך הבית כאפליקציה. בלי start_url: נפתח בכתובת שממנה הוסיפו (כולל המפתח)
+export const MANIFEST = JSON.stringify({
+  name: "היועץ - המלווה העסקי",
+  short_name: "היועץ",
+  display: "standalone",
+  scope: "/",
+  dir: "rtl",
+  lang: "he",
+  background_color: "#eef1ee",
+  theme_color: "#1f7a5a",
+});
+
+// מקבל התראות מהשרת ומציג אותן
+export const SW_JS = `
+self.addEventListener("push", (e) => {
+  let d = {};
+  try { d = e.data.json(); } catch { d = { title: "היועץ", body: e.data ? e.data.text() : "" }; }
+  e.waitUntil(self.registration.showNotification(d.title || "היועץ", { body: d.body || "", data: { url: d.url || "/" }, lang: "he", dir: "rtl" }));
+});
+self.addEventListener("notificationclick", (e) => {
+  e.notification.close();
+  e.waitUntil(clients.matchAll({ type: "window" }).then((list) => {
+    for (const c of list) if ("focus" in c) return c.focus();
+    return clients.openWindow(e.notification.data.url || "/");
+  }));
+});
+`;

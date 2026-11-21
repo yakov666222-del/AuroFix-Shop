@@ -3,6 +3,7 @@
 // "לשכנע" את הסוכן לשלוח הודעות בשמך. כל שאר הכלים זמינים רק לך.
 import { chats, ledger, memory, reminders, saveLedger, saveMemory, saveReminders } from "./store.js";
 import * as lab from "./lab.js";
+import { CHECKLIST_TOOL, updateItem } from "./checklist.js";
 
 // שינויי מלאי שממתינים לאישור הבעלים ("כן"). מבוצעים רק ב-index.js, לא על ידי המודל.
 export const pendingChanges = [];
@@ -155,6 +156,7 @@ export const OWNER_TOOLS = [
     input_schema: strict({ id: { type: "string" } }),
   },
   ...LEDGER_TOOLS,
+  CHECKLIST_TOOL,
   ...(lab.labEnabled ? LAB_TOOLS : [])
 ];
 
@@ -206,6 +208,9 @@ export async function runTool(name, input, ctx) {
       delete memory[input.topic];
       saveMemory();
       return "נמחק.";
+
+    case "update_checklist":
+      return updateItem(input);
 
     case "record_transaction": {
       if (!(input.amount > 0)) return "הסכום חייב להיות חיובי.";
