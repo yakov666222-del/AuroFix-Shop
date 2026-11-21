@@ -447,8 +447,9 @@ http
 
     if (req.method === "POST" && url.pathname === "/apikey") {
       const k = (await readBody(req)).get("apikey")?.trim() || "";
-      if (!k.startsWith("sk-ant-")) return back("המפתח צריך להתחיל ב-sk-ant-");
-      fs.writeFileSync(path.join(DATA_DIR, "anthropic_key"), k, { mode: 0o600 });
+      if (k.startsWith("sk-ant-")) fs.writeFileSync(path.join(DATA_DIR, "anthropic_key"), k, { mode: 0o600 });
+      else if (k.startsWith("AIza") && k.length > 30) fs.writeFileSync(path.join(DATA_DIR, "gemini_key"), k, { mode: 0o600 });
+      else return back("זה לא נראה כמו מפתח. מפתח של Gemini מתחיל ב-AIza, ושל Claude ב-sk-ant-");
       return back();
     }
     if (req.method === "POST" && url.pathname === "/pair") {
@@ -470,9 +471,10 @@ http
 
     // שלב 1: מפתח Claude
     if (!getApiKey()) {
-      body += `<div class="card"><h2>שלב 1 מתוך 2: המפתח של Claude</h2>
-<form method="post" action="/apikey${self}"><input name="apikey" placeholder="sk-ant-..." autocomplete="off" required><button>שמור</button></form>
-<small>המפתח נשמר רק בשרת שלך.</small></div>`;
+      body += `<div class="card"><h2>שלב 1 מתוך 2: המפתח</h2>
+<ol><li>פתח את <a href="https://aistudio.google.com/apikey" target="_blank">aistudio.google.com/apikey</a> (כניסה עם גוגל)</li><li>לחץ <b>Create API key</b> והעתק</li><li>הדבק כאן:</li></ol>
+<form method="post" action="/apikey${self}"><input name="apikey" placeholder="AIza..." autocomplete="off" required><button>שמור</button></form>
+<small>המפתח נשמר רק בשרת שלך. (אפשר גם מפתח של Claude שמתחיל ב-sk-ant-)</small></div>`;
       return res.end(page(body));
     }
 

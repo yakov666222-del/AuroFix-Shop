@@ -1,23 +1,29 @@
-// המוח של הסוכן: שיחה עם Claude + לולאת כלים
+// המוח של הסוכן: Gemini (חינם) או Claude, לפי המפתח שהוגדר + לולאת כלים
 import fs from "node:fs";
 import path from "node:path";
 import Anthropic from "@anthropic-ai/sdk";
 import { CUSTOMER_TOOLS, OWNER_TOOLS, runTool } from "./tools.js";
 import { DATA_DIR, getHistory, appendHistory, memory } from "./store.js";
+import { runGemini } from "./gemini.js";
 
-// המפתח נלקח מ-.env או מהקובץ data/anthropic_key (שנשמר דרך עמוד ההגדרה)
-let client = null;
-export function getApiKey() {
-  if (process.env.ANTHROPIC_API_KEY) return process.env.ANTHROPIC_API_KEY;
+// המפתחות נלקחים מ-.env או מהקבצים בתיקיית data (שנשמרים דרך עמוד ההגדרה)
+function readKey(envName, file) {
+  if (process.env[envName]) return process.env[envName];
   try {
-    return fs.readFileSync(path.join(DATA_DIR, "anthropic_key"), "utf8").trim() || null;
+    return fs.readFileSync(path.join(DATA_DIR, file), "utf8").trim() || null;
   } catch {
     return null;
   }
 }
+const claudeKey = () => readKey("ANTHROPIC_API_KEY", "anthropic_key");
+const geminiKey = () => readKey("GEMINI_API_KEY", "gemini_key");
+export const getApiKey = () => claudeKey() || geminiKey();
+// אם יש מפתח של Claude משתמשים בו, אחרת ב-Gemini
+export const provider = () => (claudeKey() ? "claude" : geminiKey() ? "gemini" : null);
+
+let client = null;
 function getClient() {
-  const apiKey = getApiKey();
-  if (!apiKey) throw new Error("חסר מפתח של Claude. פתח את עמוד ההגדרה והדבק אותו.");
+  const apiKey = claudeKey();
   if (!client || client.apiKey !== apiKey) client = new Anthropic({ apiKey });
   return client;
 }
@@ -172,6 +178,25 @@ function sources(content) {
  */
 export async function runAgent(mode, key, text, images, ctx) {
   const isOwner = mode === "owner";
+  if (!provider()) throw new Error("עדיין לא הוגדר מפתח. פתח את עמוד ההגדרה והדבק מפתח של Gemini או Claude.");
+
+  if (provider() === "gemini") {
+    const historyUser = (images.length ? `[${images.length} תמונות] ` : "") + (text || "");
+    const { text: out, sources } = await runGemini({
+      apiKey: geminiKey(),
+      system: isOwner ? `${OWNER_SYSTEM}\n\n${memoryBlock()}` : CUSTOMER_SYSTEM,
+      tools: isOwner ? OWNER_TOOLS : CUSTOMER_TOOLS,
+      history: getHistory(key),
+      text: `${nowLine()}\n${text || "(נשלחה תמונה)"}`,
+      images,
+      runTool: (name, input) => runTool(name, input, ctx),
+      withSearch: isOwner,
+    });
+    const finalText = out || (isOwner ? "לא הצלחתי לענות הפעם, נסה לנסח שוב." : "");
+    appendHistory(key, historyUser, finalText || "(ללא תשובה)", isOwner ? 120 : 40);
+    const uniq = [...new Set(sources.map((s) => s.split(": ").pop()))].slice(0, 3);
+    return finalText + (isOwner && uniq.length ? `\n\n🔗 מקורות:\n${uniq.join("\n")}` : "");
+  }
   const tools = isOwner ? [...WEB_TOOLS, ...OWNER_TOOLS] : CUSTOMER_TOOLS;
 
   // ההנחיות הקבועות נשמרות ב-cache. הזיכרון נמצא בבלוק נפרד אחריהן, כי הוא משתנה.
