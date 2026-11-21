@@ -73,10 +73,12 @@ const webInbox = (() => {
   }
 })();
 const saveInbox = () => fs.writeFileSync(INBOX_FILE, JSON.stringify(webInbox.slice(-50)));
+// הצ'אט שבו הבעלים באמת כותב ליועץ (בחשבונות חדשים זה לפעמים כתובת LID ולא המספר)
+const ownerChat = () => settings.ownerChatJid || selfJid;
 async function notifyOwner(text) {
   if (connected && selfJid) {
     try {
-      return await sendText(selfJid, text);
+      return await sendText(ownerChat(), text);
     } catch {}
   }
   webInbox.push({ id: Date.now() + Math.random(), text, ts: Date.now() });
@@ -314,9 +316,9 @@ async function ownerReply(text, images, isVoice) {
   }
 }
 
-async function handleOwner(text, images, isVoice) {
+async function handleOwner(text, images, isVoice, replyJid = selfJid) {
   const reply = await ownerReply(text, images, isVoice);
-  if (reply) await sendText(selfJid, reply).catch((e) => logger.error(e, "send reply"));
+  if (reply) await sendText(replyJid, reply).catch((e) => logger.error(e, "send reply"));
 }
 
 // ---------- ווטסאפ רשמי: הודעות נכנסות מ-Meta ----------
@@ -356,8 +358,13 @@ async function onMessage(m) {
     if (isSelfChat) {
       // אתה מדבר עם הסוכן
       const images = hasImage ? [await collectImage(m)].filter(Boolean) : [];
-      await sock.sendPresenceUpdate("composing", selfJid).catch(() => {});
-      await handleOwner(text, images, isAudio && !text);
+      if (settings.ownerChatJid !== jid) {
+        settings.ownerChatJid = jid; // זוכרים לאן לשלוח תזכורות
+        saveSettings();
+        console.log("📍 נשמר הצ'אט של הבעלים");
+      }
+      await sock.sendPresenceUpdate("composing", jid).catch(() => {});
+      await handleOwner(text, images, isAudio && !text, jid);
       return;
     }
 
@@ -491,6 +498,11 @@ async function connect() {
       selfJid = jidNormalizedUser(sock.user.id);
       selfJids = new Set([selfJid, sock.user.lid && jidNormalizedUser(sock.user.lid)].filter(Boolean));
       console.log(`✅ מחובר כ-${selfJid}`);
+      const lidJid = sock.user.lid && jidNormalizedUser(sock.user.lid);
+      if (!settings.ownerChatJid && lidJid) {
+        // לא ידוע עדיין איזה כתובת מציגה את הצ'אט "הודעה לעצמי": שולחים גם ל-LID
+        sendText(lidJid, "👋 היועץ מחובר. כתוב לי כאן כל דבר.").catch(() => {});
+      }
       if (!convo[OWNER_KEY]?.length) {
         await notifyOwner(`✅ מחובר!\n\n${OPENING}`).catch(() => {});
         appendHistory(OWNER_KEY, "(התחברתי עכשיו)", OPENING, 120);
