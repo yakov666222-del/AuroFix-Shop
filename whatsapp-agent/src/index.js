@@ -21,6 +21,7 @@ import * as lab from "./lab.js";
 import { DATA_DIR, appendHistory, chats, clearHistory, convo, logMessage, memory, reminders, saveReminders, saveSettings, settings } from "./store.js";
 import { findChat, pendingChanges, phoneToJid } from "./tools.js";
 import * as cloud from "./cloud.js";
+import { CHAT_HTML } from "./chat-page.js";
 
 const logger = pino({ level: process.env.LOG_LEVEL || "warn" });
 const TAKEOVER_MIN = Number(process.env.TAKEOVER_MINUTES || 60);
@@ -34,6 +35,7 @@ if (!getApiKey()) console.log("⚠️ עדיין אין מפתח (Gemini או Cl
 let sock;
 let selfJids = new Set(); // המספר שלך (בפורמט טלפון ובפורמט LID)
 let selfJid = null;
+const OWNER_KEY = "owner"; // שיחה אחת עם היועץ, מכל ערוץ (ווטסאפ או צ'אט באתר)
 let latestQr = null;
 let pairingCode = null;
 let pairPhone = null; // מספר שביקשו עבורו קוד חיבור
@@ -59,7 +61,25 @@ async function sendText(jid, text) {
   logMessage(jid, "bot", text);
   return sent;
 }
-const notifyOwner = (text) => sendText(selfJid, text);
+// הודעות מהיועץ אליך (תזכורות, סיכום שבועי). אם אין ווטסאפ מחובר, הן מחכות בצ'אט באתר
+const INBOX_FILE = path.join(DATA_DIR, "inbox.json");
+const webInbox = (() => {
+  try {
+    return JSON.parse(fs.readFileSync(INBOX_FILE, "utf8"));
+  } catch {
+    return [];
+  }
+})();
+const saveInbox = () => fs.writeFileSync(INBOX_FILE, JSON.stringify(webInbox.slice(-50)));
+async function notifyOwner(text) {
+  if (connected && selfJid) {
+    try {
+      return await sendText(selfJid, text);
+    } catch {}
+  }
+  webInbox.push({ id: Date.now() + Math.random(), text, ts: Date.now() });
+  saveInbox();
+}
 
 // ---------- עזרים ----------
 function messageText(m) {
@@ -173,7 +193,7 @@ async function handleCommand(text) {
       return "✅ הסוכן חזר לטפל בצ'אט הזה.";
     }
     case "!אפס":
-      clearHistory(selfJid);
+      clearHistory(OWNER_KEY);
       pendingChanges.splice(0);
       return "🧹 התחלנו שיחה חדשה. (מה שאני זוכר עליך ועל העסק נשאר, ראה !זיכרון)";
     case "!זיכרון": {
@@ -208,7 +228,7 @@ async function handleConfirmation(text) {
     }
     reply = `עודכן במלאי:\n${lines.join("\n")}`;
   }
-  appendHistory(selfJid, text, reply, 120); // כדי שהמלווה יידע מה קרה
+  appendHistory(OWNER_KEY, text, reply, 120); // כדי שהמלווה יידע מה קרה
   return reply;
 }
 
@@ -231,8 +251,8 @@ async function maybeWeeklySummary() {
   const prompt =
     "[הודעה אוטומטית, לא מהבעלים] תכין לי סיכום פתיחת שבוע קצר: מה חסר במלאי, תיקונים פתוחים, מצב המחזור השנתי מול התקרה, ותזכורות או מועדי דיווח שמתקרבים. בסוף, צעד אחד שכדאי לעשות השבוע.";
   try {
-    const reply = await runAgent("owner", selfJid, prompt, [], { sendText, notifyOwner, chatJid: selfJid });
-    if (reply) await sendText(selfJid, `☀️ *סיכום שבועי*\n${reply}`);
+    const reply = await runAgent("owner", OWNER_KEY, prompt, [], { sendText, notifyOwner, chatJid: selfJid || OWNER_KEY });
+    if (reply) await notifyOwner(`☀️ *סיכום שבועי*\n${reply}`);
   } catch (e) {
     logger.error(e, "weekly summary failed");
   }
@@ -253,23 +273,26 @@ async function collectImage(m) {
   }
 }
 
-// ---------- הודעה ממך ליועץ (משותף לשני סוגי החיבור) ----------
-async function handleOwner(text, images, isVoice) {
-  if (isVoice) {
-    return void (await sendText(selfJid, "🎤 עדיין אין לי אפשרות לשמוע הודעות קוליות. אפשר להקליד, או להשתמש בהכתבה של המקלדת (המיקרופון במקלדת)."));
-  }
-  if (!text && !images.length) return;
+// ---------- הודעה ממך ליועץ (משותף לכל הערוצים) ----------
+async function ownerReply(text, images, isVoice) {
+  if (isVoice) return "🎤 עדיין אין לי אפשרות לשמוע הודעות קוליות. אפשר להקליד, או להשתמש בהכתבה של המקלדת (המיקרופון במקלדת).";
+  text = text || "";
+  if (!text && !images.length) return null;
   const confirm = pendingChanges.length ? await handleConfirmation(text) : null;
-  if (confirm) return void (await sendText(selfJid, confirm));
+  if (confirm) return confirm;
   const quick = text.startsWith("!") ? await handleCommand(text) : null;
-  if (quick) return void (await sendText(selfJid, quick));
+  if (quick) return quick;
   try {
-    const reply = await runAgent("owner", selfJid, text, images, { sendText, notifyOwner, chatJid: selfJid });
-    if (reply) await sendText(selfJid, reply);
+    return await runAgent("owner", OWNER_KEY, text, images, { sendText, notifyOwner, chatJid: selfJid || OWNER_KEY });
   } catch (e) {
     logger.error(e);
-    await sendText(selfJid, `⚠️ שגיאה: ${e.message}`).catch(() => {});
+    return `⚠️ שגיאה: ${e.message}`;
   }
+}
+
+async function handleOwner(text, images, isVoice) {
+  const reply = await ownerReply(text, images, isVoice);
+  if (reply) await sendText(selfJid, reply).catch((e) => logger.error(e, "send reply"));
 }
 
 // ---------- ווטסאפ רשמי: הודעות נכנסות מ-Meta ----------
@@ -376,7 +399,6 @@ async function flush(jid) {
 
 // ---------- תזכורות ----------
 setInterval(async () => {
-  if (!connected) return;
   const due = reminders.filter((r) => r.at <= Date.now());
   for (const r of due) {
     await notifyOwner(`⏰ תזכורת: ${r.text}`).catch(() => {});
@@ -444,9 +466,9 @@ async function connect() {
       selfJid = jidNormalizedUser(sock.user.id);
       selfJids = new Set([selfJid, sock.user.lid && jidNormalizedUser(sock.user.lid)].filter(Boolean));
       console.log(`✅ מחובר כ-${selfJid}`);
-      if (!convo[selfJid]?.length) {
+      if (!convo[OWNER_KEY]?.length) {
         await notifyOwner(`✅ מחובר!\n\n${OPENING}`).catch(() => {});
-        appendHistory(selfJid, "(התחברתי עכשיו)", OPENING, 120);
+        appendHistory(OWNER_KEY, "(התחברתי עכשיו)", OPENING, 120);
       } else {
         await notifyOwner("✅ חזרתי לפעול. אפשר להמשיך מאיפה שעצרנו.").catch(() => {});
       }
@@ -542,6 +564,44 @@ http
       res.end();
     };
 
+    // ---------- צ'אט באתר ----------
+    if (url.pathname === "/chat" && req.method === "GET") {
+      res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+      return res.end(CHAT_HTML);
+    }
+    if (url.pathname === "/chat/history" && req.method === "GET") {
+      const h = (convo[OWNER_KEY] ?? []).slice(-40).map((m) => ({ role: m.role, text: m.content }));
+      res.writeHead(200, { "Content-Type": "application/json" });
+      return res.end(JSON.stringify({ history: h, opening: OPENING }));
+    }
+    if (url.pathname === "/chat/inbox" && req.method === "GET") {
+      const items = webInbox.splice(0);
+      if (items.length) saveInbox();
+      // מה שהגיע לתיבה נכנס גם להיסטוריה, כדי שהיועץ יידע שהוא שלח את זה
+      for (const it of items) appendHistory(OWNER_KEY, "(הודעה אוטומטית)", it.text, 120);
+      res.writeHead(200, { "Content-Type": "application/json" });
+      return res.end(JSON.stringify({ items }));
+    }
+    if (url.pathname === "/chat/send" && req.method === "POST") {
+      const chunks = [];
+      let size = 0;
+      for await (const c of req) {
+        size += c.length;
+        if (size > 8 * 1024 * 1024) break;
+        chunks.push(c);
+      }
+      let body = {};
+      try {
+        body = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+      } catch {}
+      const images =
+        body.image && /^image\/(jpeg|png|webp|gif)$/.test(body.image.media_type) && typeof body.image.data === "string"
+          ? [{ media_type: body.image.media_type, data: body.image.data }]
+          : [];
+      const reply = (await ownerReply(String(body.text || "").slice(0, 4000), images, false)) || "";
+      res.writeHead(200, { "Content-Type": "application/json" });
+      return res.end(JSON.stringify({ reply }));
+    }
     if (req.method === "POST" && url.pathname === "/apikey") {
       const k = (await readBody(req)).get("apikey")?.trim() || "";
       if (k.startsWith("sk-ant-")) fs.writeFileSync(path.join(DATA_DIR, "anthropic_key"), k, { mode: 0o600 });
@@ -560,7 +620,7 @@ http
       if (cloud.cloudEnabled()) {
         startCloudMode();
         await sendText(selfJid, `✅ מחובר!\n\n${OPENING}`).then(
-          () => convo[selfJid]?.length || appendHistory(selfJid, "(התחברתי עכשיו)", OPENING, 120),
+          () => convo[OWNER_KEY]?.length || appendHistory(OWNER_KEY, "(התחברתי עכשיו)", OPENING, 120),
           (e) => console.log("⚠️ הודעת פתיחה לא נשלחה:", e.message)
         );
       }

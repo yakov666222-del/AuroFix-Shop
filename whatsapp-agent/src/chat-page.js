@@ -1,0 +1,146 @@
+// דף הצ'אט עם היועץ (נפתח מהטלפון, אפשר לשמור במסך הבית כמו אפליקציה)
+export const CHAT_HTML = `<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,interactive-widget=resizes-content">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="היועץ">
+<meta name="theme-color" content="#1f7a5a">
+<title>היועץ</title>
+<style>
+  :root { --bg:#eef1ee; --surface:#fff; --fg:#1b2420; --muted:#62706a; --line:#d5dcd7; --accent:#1f7a5a; --accent-fg:#fff; --user:#d9f0e3; --bot:#fff; --warn:#9a5b00; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#0f1613; --surface:#17211c; --fg:#e7efe9; --muted:#93a39a; --line:#2a3832; --accent:#3fb88a; --accent-fg:#07130d; --user:#1d3a2d; --bot:#1a2520; --warn:#e0a64a; } }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body { background: var(--bg); color: var(--fg); font: 16px/1.5 system-ui, -apple-system, "Segoe UI", Arial, sans-serif; }
+  .app { height: 100%; max-width: 720px; margin: 0 auto; display: flex; flex-direction: column;
+         padding: env(safe-area-inset-top) max(16px, env(safe-area-inset-right)) 0 max(16px, env(safe-area-inset-left)); }
+  header { padding: 12px 0 10px; border-bottom: 1px solid var(--line); display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+  h1 { font-size: 1.1rem; margin: 0; }
+  .sub { color: var(--muted); font-size: .8rem; }
+  #thread { flex: 1; min-height: 0; overflow-y: auto; padding: 14px 0; display: flex; flex-direction: column; gap: 8px; }
+  .msg { max-width: 86%; padding: 8px 12px; border-radius: 14px; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .bot { align-self: flex-start; background: var(--bot); border: 1px solid var(--line); border-top-right-radius: 4px; }
+  .user { align-self: flex-end; background: var(--user); border-top-left-radius: 4px; }
+  .note { align-self: center; color: var(--warn); font-size: .85rem; }
+  .msg img { max-width: 180px; border-radius: 8px; display: block; margin-bottom: 4px; }
+  .typing { color: var(--muted); }
+  .chips { display: flex; gap: 6px; flex-wrap: wrap; padding-bottom: 8px; }
+  .chips button { background: var(--surface); border: 1px solid var(--line); color: var(--fg); border-radius: 999px; padding: 6px 12px; font: inherit; font-size: .85rem; }
+  form { display: flex; gap: 6px; padding: 8px 0 calc(10px + env(safe-area-inset-bottom)); border-top: 1px solid var(--line); align-items: flex-end; }
+  textarea { flex: 1; min-width: 0; resize: none; font: inherit; color: var(--fg); background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 9px 12px; max-height: 140px; }
+  .btn { border: 0; border-radius: 12px; padding: 10px 14px; font: inherit; font-weight: 600; }
+  .send { background: var(--accent); color: var(--accent-fg); }
+  .attach { background: var(--surface); border: 1px solid var(--line); color: var(--fg); }
+  .send:disabled { opacity: .5; }
+  #preview { font-size: .8rem; color: var(--muted); padding-bottom: 4px; }
+</style>
+</head>
+<body>
+<div class="app">
+  <header>
+    <div><h1>🤖 המלווה העסקי</h1><div class="sub">כתוב לו כמו בווטסאפ</div></div>
+  </header>
+  <div id="thread" aria-live="polite"></div>
+  <div class="chips" id="chips"></div>
+  <div id="preview"></div>
+  <form id="form">
+    <label class="btn attach" for="file" title="צרף תמונה">📎</label>
+    <input id="file" type="file" accept="image/*" hidden>
+    <textarea id="input" rows="1" placeholder="כתוב הודעה..." aria-label="הודעה"></textarea>
+    <button class="btn send" id="send" type="submit">שלח</button>
+  </form>
+</div>
+<script>
+const KEY = new URLSearchParams(location.search).get("key") || "";
+const q = (p) => p + (p.includes("?") ? "&" : "?") + "key=" + encodeURIComponent(KEY);
+const thread = document.getElementById("thread"), input = document.getElementById("input"), sendBtn = document.getElementById("send");
+const chips = document.getElementById("chips"), fileIn = document.getElementById("file"), preview = document.getElementById("preview");
+let image = null, busy = false;
+
+function bubble(role, text, imgSrc) {
+  const d = document.createElement("div");
+  d.className = "msg " + role;
+  if (imgSrc) { const i = document.createElement("img"); i.src = imgSrc; d.appendChild(i); }
+  // *הדגשה* בסגנון ווטסאפ, בלי HTML מהשרת
+  const parts = String(text || "").split(/(\\*[^*\\n]+\\*)/g);
+  for (const p of parts) {
+    if (/^\\*[^*\\n]+\\*$/.test(p)) { const b = document.createElement("b"); b.textContent = p.slice(1, -1); d.appendChild(b); }
+    else d.appendChild(document.createTextNode(p));
+  }
+  thread.appendChild(d);
+  thread.scrollTop = thread.scrollHeight;
+  return d;
+}
+
+async function load() {
+  try {
+    const r = await fetch(q("/chat/history"));
+    if (r.status === 403) { bubble("note", "אין גישה. פתח את הדף מהקישור המלא (עם key=...)."); return; }
+    const { history, opening } = await r.json();
+    const real = history.filter((m) => m.text && m.text !== "(התחברתי עכשיו)");
+    if (!real.length) bubble("bot", opening);
+    for (const m of history) {
+      if (m.text === "(התחברתי עכשיו)" || m.text === "(הודעה אוטומטית)") continue;
+      bubble(m.role === "user" ? "user" : "bot", m.text);
+    }
+    if (!real.length) showChips();
+  } catch { bubble("note", "אין חיבור לשרת. נסה לרענן."); }
+  pollInbox();
+}
+
+function showChips() {
+  for (const s of ["אני בנקודת אפס, מאיפה מתחילים?", "מה חסר במלאי?", "מה התיקונים הפתוחים?", "איך אני מתמחר תיקון מסך?"]) {
+    const b = document.createElement("button"); b.type = "button"; b.textContent = s;
+    b.onclick = () => send(s); chips.appendChild(b);
+  }
+}
+
+async function pollInbox() {
+  try {
+    const r = await fetch(q("/chat/inbox"));
+    if (r.ok) for (const it of (await r.json()).items) bubble("bot", it.text);
+  } catch {}
+}
+setInterval(pollInbox, 30000);
+document.addEventListener("visibilitychange", () => { if (!document.hidden) pollInbox(); });
+
+fileIn.onchange = async () => {
+  const f = fileIn.files[0]; if (!f) return;
+  // מקטינים את התמונה כדי שתישלח מהר
+  const bmp = await createImageBitmap(f);
+  const scale = Math.min(1, 1600 / Math.max(bmp.width, bmp.height));
+  const c = document.createElement("canvas"); c.width = bmp.width * scale; c.height = bmp.height * scale;
+  c.getContext("2d").drawImage(bmp, 0, 0, c.width, c.height);
+  const url = c.toDataURL("image/jpeg", 0.85);
+  image = { media_type: "image/jpeg", data: url.split(",")[1], url };
+  preview.textContent = "📷 תמונה מצורפת (לחץ שלח)";
+  fileIn.value = "";
+};
+
+async function send(text) {
+  text = (text || "").trim();
+  if ((!text && !image) || busy) return;
+  busy = true; sendBtn.disabled = true; chips.innerHTML = "";
+  const img = image; image = null; preview.textContent = "";
+  bubble("user", text, img && img.url);
+  const wait = bubble("bot typing", "חושב...");
+  try {
+    const r = await fetch(q("/chat/send"), { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text, image: img ? { media_type: img.media_type, data: img.data } : null }) });
+    const { reply } = await r.json();
+    wait.remove();
+    bubble("bot", reply || "(אין תשובה, נסה לנסח שוב)");
+  } catch {
+    wait.remove(); bubble("note", "ההודעה לא נשלחה. בדוק אינטרנט ונסה שוב.");
+  } finally { busy = false; sendBtn.disabled = false; }
+}
+
+document.getElementById("form").onsubmit = (e) => { e.preventDefault(); const t = input.value; input.value = ""; input.style.height = "auto"; send(t); };
+input.addEventListener("input", () => { input.style.height = "auto"; input.style.height = Math.min(input.scrollHeight, 140) + "px"; });
+load();
+</script>
+</body>
+</html>`;
