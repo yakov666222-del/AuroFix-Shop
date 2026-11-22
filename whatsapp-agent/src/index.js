@@ -75,12 +75,23 @@ const webInbox = (() => {
 const saveInbox = () => fs.writeFileSync(INBOX_FILE, JSON.stringify(webInbox.slice(-50)));
 // הצ'אט שבו הבעלים באמת כותב ליועץ (בחשבונות חדשים זה לפעמים כתובת LID ולא המספר)
 const ownerChat = () => settings.ownerChatJid || selfJid;
-async function notifyOwner(text) {
+// buttons: כפתורי תשובה בווטסאפ (למשל "הזמנתי הכל"). בצ'אט באתר הם מופיעים כשורת "אפשר לענות"
+async function notifyOwner(text, { buttons } = {}) {
   if (connected && selfJid) {
     try {
+      if (buttons?.length && cloud.cloudEnabled()) {
+        const to = ownerChat().split("@")[0];
+        if (text.length > 1000) {
+          await cloud.cloudSend(to, text);
+          await cloud.cloudSendButtons(to, "מה הסטטוס?", buttons);
+        } else await cloud.cloudSendButtons(to, text, buttons);
+        logMessage(ownerChat(), "bot", text);
+        return null;
+      }
       return await sendText(ownerChat(), text);
     } catch {}
   }
+  if (buttons?.length) text += `\n\nאפשר לענות: ${buttons.join(" / ")}`;
   webInbox.push({ id: Date.now() + Math.random(), text, ts: Date.now() });
   saveInbox();
   // התראה קופצת לטלפון
@@ -255,7 +266,7 @@ async function maybeWeeklySummary() {
   settings.lastWeekly = now.date;
   saveSettings();
   const prompt =
-    "[הודעה אוטומטית, לא מהבעלים] תכין לי סיכום פתיחת שבוע קצר: מה חסר במלאי, תיקונים פתוחים, מצב המחזור השנתי מול התקרה, ותזכורות או מועדי דיווח שמתקרבים. בסוף, צעד אחד שכדאי לעשות השבוע.";
+    "[הודעה אוטומטית, לא מהבעלים] תכין לי סיכום פתיחת שבוע קצר: מה חסר במלאי ומה כבר הוזמן, תיקונים פתוחים, מצב המחזור השנתי מול התקרה, תקציב הפתיחה (כמה שולם עד עכשיו, כמה צפוי, ועלויות חודשיות), ותזכורות או מועדי דיווח שמתקרבים. בסוף, צעד אחד שכדאי לעשות השבוע.";
   try {
     const reply = await runAgent("owner", OWNER_KEY, prompt, [], { sendText, notifyOwner, chatJid: selfJid || OWNER_KEY });
     if (reply) await notifyOwner(`☀️ *סיכום שבועי*\n${reply}`);
@@ -336,7 +347,7 @@ async function onCloudMessage(m) {
   // מתי הבעלים כתב לאחרונה: ממנו נספרות 24 השעות שבהן מותר לשלוח לו בחינם
   settings.lastOwnerMsg = Number(m.timestamp) * 1000 || Date.now();
   saveSettings();
-  const text = m.text?.body || m.image?.caption || "";
+  const text = m.text?.body || cloud.buttonText(m) || m.image?.caption || "";
   const images = m.type === "image" ? [await cloud.downloadImage(m.image.id, m.image.url).catch(() => null)].filter(Boolean) : [];
   await handleOwner(text, images, m.type === "audio");
 }
@@ -442,7 +453,38 @@ setInterval(async () => {
   maybeWeeklySummary();
   maybeNag();
   maybeKeepWindow();
+  maybeShortageAlert();
 }, 20_000);
+
+// התראת חוסרים במלאי: פעם ביום (א'-ו' ב-12:00), רק על מה שעוד לא הוזמן.
+// אותה רשימה לא חוזרת כל יום: רק כשנוסף חוסר חדש, או אחרי יומיים בלי תגובה.
+const SHORTAGE_BUTTONS = ["✅ הזמנתי הכל", "🛒 הזמנתי חלק", "⏰ תזכיר מחר"];
+let shortageBusy = false;
+async function maybeShortageAlert() {
+  if (!lab.labEnabled || shortageBusy || process.env.SHORTAGE_ALERTS === "false") return;
+  const now = israelNow();
+  if (now.hour !== 12 || now.weekday === "Sat" || settings.lastShortageDay === now.date) return;
+  shortageBusy = true;
+  try {
+    const { toOrder } = await lab.shortageData();
+    settings.lastShortageDay = now.date;
+    const key = toOrder.map((x) => x.item.id).sort().join(",");
+    const prev = settings.lastShortageAlert || {};
+    const isNew = toOrder.some((x) => !(prev.key || "").split(",").includes(x.item.id));
+    const stale = Date.now() - (prev.ts || 0) > 2 * 24 * 3600_000;
+    if (!toOrder.length || (!isNew && !stale)) return saveSettings();
+    settings.lastShortageAlert = { key, ts: Date.now() };
+    saveSettings();
+    const text = `📦 *חסר במלאי*\n${toOrder.map(lab.shortageLine).join("\n")}\n\nסה"כ להזמנה ≈ ${lab.orderTotal(toOrder)}\nהזמנת?`;
+    // נשמר בשיחה, כדי שהיועץ יידע על אילו פריטים מדובר כשתלחץ על כפתור
+    appendHistory(OWNER_KEY, "[הודעה אוטומטית, לא מהבעלים] התראת חוסרים יומית", `${text}\n(מזהים: ${toOrder.map((x) => `${x.item.name}=${x.item.id}`).join(", ")})`);
+    await notifyOwner(text, { buttons: SHORTAGE_BUTTONS });
+  } catch (e) {
+    logger.error(e, "shortage alert failed");
+  } finally {
+    shortageBusy = false;
+  }
+}
 
 // ווטסאפ מרשה לשלוח לבעלים בחינם רק 24 שעות אחרי שהוא כתב.
 // לפני שהחלון נסגר מבקשים ממנו תגובה קצרה, כדי שההתראות ימשיכו להגיע לווטסאפ בלי תבנית בתשלום.

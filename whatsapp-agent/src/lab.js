@@ -61,17 +61,63 @@ export async function searchInventory(query) {
   return hits.slice(0, 15).map(itemLine).join("\n");
 }
 
-export async function shortages() {
-  const items = await api("/api/inventory");
+// הזמנות שכבר יצאו לספק ועוד לא הגיעו (המסך "הזמנות ממתינות" במערכת המעבדה)
+export async function pendingOrders() {
+  return api("/api/pending_orders").catch(() => []);
+}
+const sameItem = (i, o) => (i.sku && o.sku && norm(i.sku) === norm(o.sku)) || norm(i.name) === norm(o.name);
+export const recommendedQty = (i) => (i.reorder_qty > 0 ? i.reorder_qty : Math.max(i.min * 2 - i.qty, 1));
+
+// חוסרים: מה מתחת למינימום, ומה מזה כבר הוזמן
+export async function shortageData() {
+  const [items, orders] = await Promise.all([api("/api/inventory"), pendingOrders()]);
   const low = items.filter((i) => i.min > 0 && i.qty <= i.min);
-  const zero = items.filter((i) => !(i.min > 0) && i.qty <= 0);
-  const lines = low.map((i) => {
-    const order = i.reorder_qty > 0 ? i.reorder_qty : Math.max(i.min * 2 - i.qty, 1);
-    return `• ${i.name}: יש ${i.qty}, מינימום ${i.min}. להזמין ${order}${i.cost ? ` (≈${money(order * i.cost)})` : ""}${
-      i.supplier ? ` מ-${i.supplier}` : ""
-    }`;
+  const withOrder = low.map((i) => ({ item: i, qty: recommendedQty(i), order: orders.find((o) => sameItem(i, o)) }));
+  return {
+    items,
+    toOrder: withOrder.filter((x) => !x.order),
+    ordered: withOrder.filter((x) => x.order),
+  };
+}
+
+export const shortageLine = ({ item: i, qty }) =>
+  `• ${i.name}: יש ${i.qty}, מינימום ${i.min}. להזמין ${qty}${i.cost ? ` (≈${money(qty * i.cost)})` : ""}${i.supplier ? ` מ-${i.supplier}` : ""}`;
+export const orderTotal = (list) => money(list.reduce((s, x) => s + x.qty * (Number(x.item.cost) || 0), 0));
+
+// סימון "הוזמן": יוצר הזמנה ממתינה במערכת המעבדה. כשמסמנים שם "התקבל", הכמות נכנסת למלאי.
+export async function markOrdered(itemId, qty, note) {
+  const i = await getItem(itemId);
+  const { ordered } = await shortageData();
+  const existing = ordered.find((x) => x.item.id === i.id);
+  if (existing) return `${i.name} כבר מסומן כהוזמן (${existing.order.qty_ordered} יח'), לא יצרתי הזמנה כפולה.`;
+  const amount = qty > 0 ? qty : i.min > 0 ? recommendedQty(i) : 1;
+  await api("/api/pending_orders", {
+    method: "POST",
+    body: JSON.stringify({
+      name: i.name,
+      sku: i.sku || "",
+      cat: i.cat || "",
+      loc: i.loc || "",
+      qty_ordered: amount,
+      cost: i.cost || 0,
+      price: i.price || 0,
+      min: i.min || 0,
+      reorder_qty: i.reorder_qty || 0,
+      supplier: i.supplier || "",
+      notes: `הוזמן דרך היועץ${note ? `: ${note}` : ""} (במלאי כשהוזמן: ${i.qty})`,
+    }),
   });
-  let out = lines.length ? `מתחת למינימום:\n${lines.join("\n")}` : "אין פריטים מתחת לכמות המינימום.";
+  return `✅ ${i.name}: סומן כהוזמן, ${amount} יח'${i.cost ? ` (≈${money(amount * i.cost)})` : ""}. מופיע ב"הזמנות ממתינות" במערכת, וכשתסמן שם "התקבל" הכמות תיכנס למלאי.`;
+}
+
+export async function shortages() {
+  const { items, toOrder, ordered } = await shortageData();
+  const zero = items.filter((i) => !(i.min > 0) && i.qty <= 0);
+  let out = toOrder.length
+    ? `מתחת למינימום ועוד לא הוזמן:\n${toOrder.map(shortageLine).join("\n")}\nסה"כ להזמנה ≈ ${orderTotal(toOrder)}`
+    : "אין פריטים מתחת למינימום שעוד לא הוזמנו.";
+  if (ordered.length)
+    out += `\n\n🛒 כבר הוזמן ומחכה להגעה:\n${ordered.map((x) => `• ${x.item.name}: ${x.order.qty_ordered} יח'`).join("\n")}`;
   if (zero.length) out += `\n\nנגמרו (בלי מינימום מוגדר):\n${zero.slice(0, 20).map((i) => `• ${i.name}`).join("\n")}`;
   const noMin = items.filter((i) => !(i.min > 0)).length;
   if (noMin) out += `\n\n(ל-${noMin} מתוך ${items.length} פריטים לא מוגדרת כמות מינימום, אז אי אפשר לדעת מתי הם "חסרים".)`;

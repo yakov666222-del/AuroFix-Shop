@@ -81,6 +81,17 @@ const LAB_TOOLS = [
     }),
   },
   {
+    name: "mark_ordered",
+    description:
+      "מסמן פריט חסר כ'הוזמן' (הבעלים הזמין אותו מספק): יוצר הזמנה ממתינה במערכת המעבדה, כך שהוא מפסיק להופיע כחוסר. כשההזמנה מגיעה, מסמנים במערכת 'התקבל' והכמות נכנסת למלאי. qty=0 = הכמות המומלצת. כשהבעלים אומר 'הזמנתי הכל', קרא לכלי פעם אחת לכל פריט ברשימת החוסרים האחרונה.",
+    strict: true,
+    input_schema: strict({
+      item_id: { type: "string" },
+      qty: { type: "integer", description: "כמה הוזמן. 0 = הכמות המומלצת" },
+      note: { type: "string", description: "ספק, מחיר, מועד הגעה צפוי וכו'. ריק אם אין" },
+    }),
+  },
+  {
     name: "find_repairs",
     description: "מחפש תיקונים במערכת המעבדה לפי שם לקוח, דגם, תיאור או מספר תיקון. query ריק או 'פתוחים' מחזיר את כל התיקונים הפתוחים.",
     strict: true,
@@ -249,6 +260,9 @@ export async function runTool(name, input, ctx) {
 
     case "inventory_shortages":
       return lab.shortages();
+
+    case "mark_ordered":
+      return lab.markOrdered(input.item_id, input.qty, input.note);
 
     case "find_repairs":
       return lab.findRepairs(input.query);

@@ -71,6 +71,26 @@ export async function cloudSend(toPhone, text) {
   }
 }
 
+// הודעה עם כפתורי תשובה (עד 3, עד 20 תווים לכפתור). לחיצה מגיעה ליועץ כמו הודעת טקסט
+export async function cloudSendButtons(toPhone, text, buttons) {
+  await graph(`${cfg.phoneNumberId}/messages`, {
+    method: "POST",
+    body: JSON.stringify({
+      messaging_product: "whatsapp",
+      to: normPhone(toPhone),
+      type: "interactive",
+      interactive: {
+        type: "button",
+        body: { text: text.slice(0, 1024) },
+        action: { buttons: buttons.slice(0, 3).map((t, i) => ({ type: "reply", reply: { id: `b${i}`, title: t.slice(0, 20) } })) },
+      },
+    }),
+  });
+}
+
+// טקסט של לחיצה על כפתור (בפורמט של Meta)
+export const buttonText = (m) => m.interactive?.button_reply?.title || m.interactive?.list_reply?.title || m.button?.text || "";
+
 export async function markRead(messageId) {
   await graph(`${cfg.phoneNumberId}/messages`, {
     method: "POST",
@@ -138,6 +158,11 @@ function extractKapso(body) {
     if (m.type === "text") msg.text = { body: m.text?.body || m.kapso?.content || "" };
     if (m.type === "image") msg.image = { id: m.image?.id, caption: m.image?.caption || "", url: m.kapso?.media_url };
     if (m.type === "audio") msg.audio = {};
+    if (m.type === "interactive" || m.type === "button") {
+      msg.interactive = m.interactive;
+      msg.button = m.button;
+      if (!buttonText(msg)) msg.text = { body: m.kapso?.content || "" };
+    }
     out.push(msg);
   }
   return out;
