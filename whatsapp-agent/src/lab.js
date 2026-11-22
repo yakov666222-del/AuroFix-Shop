@@ -68,9 +68,27 @@ export async function pendingOrders() {
 const sameItem = (i, o) => (i.sku && o.sku && norm(i.sku) === norm(o.sku)) || norm(i.name) === norm(o.name);
 export const recommendedQty = (i) => (i.reorder_qty > 0 ? i.reorder_qty : Math.max(i.min * 2 - i.qty, 1));
 
+// הבעלים סורק ברקוד כשהסחורה מגיעה, והכמות נכנסת למלאי ישר מהסריקה (בלי "התקבל" על ההזמנה).
+// לכן הזמנה שהיועץ פתח נסגרת לבד כשהמלאי עלה: הפריט חזר מעל המינימום, או שנוספה הכמות שהוזמנה.
+const ADVISOR_NOTE = "הוזמן דרך היועץ";
+async function closeArrivedOrders(items, orders) {
+  const open = [];
+  for (const o of orders) {
+    const i = items.find((x) => sameItem(x, o));
+    const before = Number(/במלאי כשהוזמן: (-?\d+)/.exec(o.notes || "")?.[1]);
+    const arrived =
+      i && String(o.notes || "").startsWith(ADVISOR_NOTE) &&
+      ((i.min > 0 && i.qty > i.min) || (Number.isFinite(before) && i.qty >= before + Number(o.qty_ordered || 0)));
+    if (arrived) await api(`/api/pending_orders/${encodeURIComponent(o.id)}`, { method: "DELETE" }).catch(() => open.push(o));
+    else open.push(o);
+  }
+  return open;
+}
+
 // חוסרים: מה מתחת למינימום, ומה מזה כבר הוזמן
 export async function shortageData() {
-  const [items, orders] = await Promise.all([api("/api/inventory"), pendingOrders()]);
+  const items = await api("/api/inventory");
+  const orders = await closeArrivedOrders(items, await pendingOrders());
   const low = items.filter((i) => i.min > 0 && i.qty <= i.min);
   const withOrder = low.map((i) => ({ item: i, qty: recommendedQty(i), order: orders.find((o) => sameItem(i, o)) }));
   return {
@@ -104,10 +122,10 @@ export async function markOrdered(itemId, qty, note) {
       min: i.min || 0,
       reorder_qty: i.reorder_qty || 0,
       supplier: i.supplier || "",
-      notes: `הוזמן דרך היועץ${note ? `: ${note}` : ""} (במלאי כשהוזמן: ${i.qty})`,
+      notes: `${ADVISOR_NOTE}${note ? `: ${note}` : ""} (במלאי כשהוזמן: ${i.qty})`,
     }),
   });
-  return `✅ ${i.name}: סומן כהוזמן, ${amount} יח'${i.cost ? ` (≈${money(amount * i.cost)})` : ""}. מופיע ב"הזמנות ממתינות" במערכת, וכשתסמן שם "התקבל" הכמות תיכנס למלאי.`;
+  return `✅ ${i.name}: סומן כהוזמן, ${amount} יח'${i.cost ? ` (≈${money(amount * i.cost)})` : ""}. מופיע ב"הזמנות ממתינות" במערכת. כשהסחורה מגיעה, פשוט סרוק אותה כרגיל וההזמנה תיסגר לבד.`;
 }
 
 export async function shortages() {
