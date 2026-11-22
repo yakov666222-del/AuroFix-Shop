@@ -79,18 +79,7 @@ async function notifyOwner(text) {
   if (connected && selfJid) {
     try {
       return await sendText(ownerChat(), text);
-    } catch (e) {
-      // עברו 24 שעות מאז שכתבת ליועץ: שולחים דרך התבנית המאושרת, כדי שההתראה תגיע לווטסאפ בכל מקרה
-      if (cloud.cloudEnabled() && e.windowClosed) {
-        try {
-          await cloud.cloudSendTemplate(ownerChat().split("@")[0], text);
-          logMessage(ownerChat(), "bot", text);
-          return null;
-        } catch (e2) {
-          console.error("שליחת התבנית נכשלה:", e2.message);
-        }
-      }
-    }
+    } catch {}
   }
   webInbox.push({ id: Date.now() + Math.random(), text, ts: Date.now() });
   saveInbox();
@@ -344,6 +333,9 @@ async function onCloudMessage(m) {
     return;
   }
   cloud.markRead(m.id);
+  // מתי הבעלים כתב לאחרונה: ממנו נספרות 24 השעות שבהן מותר לשלוח לו בחינם
+  settings.lastOwnerMsg = Number(m.timestamp) * 1000 || Date.now();
+  saveSettings();
   const text = m.text?.body || m.image?.caption || "";
   const images = m.type === "image" ? [await cloud.downloadImage(m.image.id, m.image.url).catch(() => null)].filter(Boolean) : [];
   await handleOwner(text, images, m.type === "audio");
@@ -449,7 +441,28 @@ setInterval(async () => {
   if (due.length) saveReminders();
   maybeWeeklySummary();
   maybeNag();
+  maybeKeepWindow();
 }, 20_000);
+
+// ווטסאפ מרשה לשלוח לבעלים בחינם רק 24 שעות אחרי שהוא כתב.
+// לפני שהחלון נסגר מבקשים ממנו תגובה קצרה, כדי שההתראות ימשיכו להגיע לווטסאפ בלי תבנית בתשלום.
+async function maybeKeepWindow() {
+  const last = settings.lastOwnerMsg;
+  if (!cloud.cloudEnabled() || !last || settings.windowPing === last) return;
+  const end = last + 24 * 3600_000;
+  const left = end - Date.now();
+  if (left < 15 * 60_000) return; // כבר מאוחר מדי לשלוח
+  const { hour } = israelNow();
+  if (hour < 9 || hour >= 22) return; // לא מעירים בלילה
+  const closesTonight = hour >= 21 && left < 12 * 3600_000; // החלון ייסגר לפני 9 בבוקר
+  if (left > 4 * 3600_000 && !closesTonight) return;
+  settings.windowPing = last;
+  saveSettings();
+  await sendText(
+    ownerChat(),
+    "👋 עברו כמעט 24 שעות מאז שכתבת לי. ווטסאפ מרשה לי לשלוח לך הודעות רק אם כתבת לי ביממה האחרונה.\nשלח לי משהו קצר (אפילו 👍) כדי שהתזכורות וההתראות ימשיכו להגיע לכאן."
+  ).catch((e) => logger.error(e, "window ping failed"));
+}
 
 // ---------- חיבור לווטסאפ ----------
 async function connect() {

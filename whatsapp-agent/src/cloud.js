@@ -65,35 +65,10 @@ export async function cloudSend(toPhone, text) {
       });
     } catch (e) {
       // 131047: עברו 24 שעות מאז שהנמען כתב, ווטסאפ לא מאפשר להתחיל שיחה בלי תבנית מאושרת
-      if (e.code === 131047) {
-        const err = new Error("ווטסאפ לא מאפשר לשלוח לו הודעה כי הוא לא כתב למספר של היועץ ב-24 השעות האחרונות.");
-        err.windowClosed = true;
-        throw err;
-      }
+      if (e.code === 131047) throw new Error("ווטסאפ לא מאפשר לשלוח לו הודעה כי הוא לא כתב למספר של היועץ ב-24 השעות האחרונות.");
       throw e;
     }
   }
-}
-
-// התראה דרך תבנית מאושרת: עובדת גם כשעברו 24 שעות מההודעה האחרונה של הבעלים.
-// בפרמטר של תבנית אסור ירידת שורה או רצף של רווחים, אז מכווצים את הטקסט.
-export const ALERT_TEMPLATE = process.env.ALERT_TEMPLATE || "advisor_alert";
-export async function cloudSendTemplate(toPhone, text) {
-  let param = String(text)
-    .replace(/\*/g, "")
-    .replace(/\s*\n+\s*/g, " · ")
-    .replace(/\s{2,}/g, " ")
-    .trim();
-  if (param.length > 900) param = param.slice(0, 897) + "...";
-  await graph(`${cfg.phoneNumberId}/messages`, {
-    method: "POST",
-    body: JSON.stringify({
-      messaging_product: "whatsapp",
-      to: normPhone(toPhone),
-      type: "template",
-      template: { name: ALERT_TEMPLATE, language: { code: "he" }, components: [{ type: "body", parameters: [{ type: "text", text: param }] }] },
-    }),
-  });
 }
 
 export async function markRead(messageId) {
