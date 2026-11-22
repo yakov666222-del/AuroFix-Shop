@@ -79,7 +79,18 @@ async function notifyOwner(text) {
   if (connected && selfJid) {
     try {
       return await sendText(ownerChat(), text);
-    } catch {}
+    } catch (e) {
+      // עברו 24 שעות מאז שכתבת ליועץ: שולחים דרך התבנית המאושרת, כדי שההתראה תגיע לווטסאפ בכל מקרה
+      if (cloud.cloudEnabled() && e.windowClosed) {
+        try {
+          await cloud.cloudSendTemplate(ownerChat().split("@")[0], text);
+          logMessage(ownerChat(), "bot", text);
+          return null;
+        } catch (e2) {
+          console.error("שליחת התבנית נכשלה:", e2.message);
+        }
+      }
+    }
   }
   webInbox.push({ id: Date.now() + Math.random(), text, ts: Date.now() });
   saveInbox();
