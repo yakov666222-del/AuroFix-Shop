@@ -38,9 +38,18 @@ const withTimeout = (p, ms) =>
 
 async function generate(apiKey, params) {
   let lastErr;
+  let emptyReason = null;
   for (const model of await models(apiKey)) {
     try {
-      return await withTimeout(client(apiKey).models.generateContent({ model, ...params }), 45000);
+      const res = await withTimeout(client(apiKey).models.generateContent({ model, ...params }), 45000);
+      // תשובה ריקה (בלי טקסט ובלי קריאה לכלי): מנסים את הדגם הבא במקום להחזיר כלום
+      if (!(res.text || "").trim() && !res.functionCalls?.length) {
+        const c = res.candidates?.[0];
+        emptyReason = c?.finishReason || res.promptFeedback?.blockReason || "ללא סיבה";
+        console.log(`⚠️ Gemini ${model} החזיר תשובה ריקה (${emptyReason}), מנסה דגם אחר`);
+        continue;
+      }
+      return res;
     } catch (e) {
       lastErr = e;
       const code = e?.status ?? e?.code;
@@ -48,6 +57,7 @@ async function generate(apiKey, params) {
       console.log(`⚠️ Gemini ${model} לא זמין (${code}), מנסה דגם אחר`);
     }
   }
+  if (emptyReason && !lastErr) throw new Error(`Gemini החזיר תשובה ריקה מכל הדגמים (${emptyReason}). נסה לנסח אחרת.`);
   if ((lastErr?.status ?? lastErr?.code) === 429) {
     throw new Error("הגעתי למכסה החינמית של Gemini להיום. נסה שוב מאוחר יותר.");
   }
@@ -128,7 +138,7 @@ export async function runGemini({ apiKey, system, tools, history, text, images, 
     }
     contents.push({ role: "user", parts });
   }
-  return { text: "", sources };
+  return { text: "⚠️ נתקעתי בלולאה של פעולות ולא הגעתי לתשובה. נסה לנסח את הבקשה בצורה פשוטה יותר.", sources };
 }
 
 // לבדיקות בלבד: החלפת הלקוח בלקוח מדומה
