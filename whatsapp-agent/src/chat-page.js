@@ -76,7 +76,7 @@ export const CHAT_HTML = `<!doctype html>
   <form id="form">
     <label class="btn attach" for="file" title="צרף תמונה">📎</label>
     <input id="file" type="file" accept="image/*" hidden>
-    <textarea id="input" rows="1" placeholder="כתוב הודעה..." aria-label="הודעה"></textarea>
+    <textarea id="input" rows="1" placeholder="כתוב הודעה..." aria-label="הודעה" enterkeyhint="send"></textarea>
     <button class="btn send" id="send" type="submit">שלח</button>
   </form>
 </div>
@@ -195,6 +195,13 @@ async function setupPush() {
 setupPush();
 
 document.getElementById("form").onsubmit = (e) => { e.preventDefault(); const t = input.value; input.value = ""; input.style.height = "auto"; send(t); };
+// אנטר שולח (גם במקלדת של אייפד), Shift+אנטר יורד שורה. בזמן הקלדה במקלדת שמרכיבה אותיות לא שולחים.
+input.addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && !e.shiftKey && !e.isComposing && e.keyCode !== 229) {
+    e.preventDefault();
+    document.getElementById("form").requestSubmit();
+  }
+});
 input.addEventListener("input", () => { input.style.height = "auto"; input.style.height = Math.min(input.scrollHeight, 140) + "px"; });
 load();
 </script>
