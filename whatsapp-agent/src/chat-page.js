@@ -198,12 +198,34 @@ document.getElementById("form").onsubmit = (e) => { e.preventDefault(); const t 
 // אנטר שולח באייפד ובמחשב, Shift+אנטר יורד שורה. בטלפון (אייפון/אנדרואיד) אנטר נשאר ירידת שורה, ושולחים בכפתור.
 const isPhone = /iPhone|iPod|Android.*Mobile|Windows Phone/i.test(navigator.userAgent);
 if (!isPhone) input.setAttribute("enterkeyhint", "send");
+// שתי דרכים לתפוס את האנטר: keydown (מקלדת חיצונית) ו-beforeinput (המקלדת שעל המסך באייפד, שלא תמיד שולחת keydown רגיל)
+let shiftBreak = false, lastSubmit = 0;
+const isBreak = (e) => e.inputType === "insertLineBreak" || e.inputType === "insertParagraph";
+const submitNow = () => {
+  if (Date.now() - lastSubmit < 400) return;
+  lastSubmit = Date.now();
+  document.getElementById("form").requestSubmit();
+};
 input.addEventListener("keydown", (e) => {
-  if (!isPhone && e.key === "Enter" && !e.shiftKey && !e.isComposing && e.keyCode !== 229) {
-    e.preventDefault();
-    document.getElementById("form").requestSubmit();
-  }
+  if (isPhone || e.key !== "Enter") return;
+  if (e.shiftKey) { shiftBreak = true; return; }
+  if (e.isComposing) return;
+  e.preventDefault();
+  submitNow();
 });
+input.addEventListener("beforeinput", (e) => {
+  if (isPhone || !isBreak(e) || shiftBreak) return;
+  e.preventDefault();
+  submitNow();
+});
+input.addEventListener("input", (e) => {
+  if (isPhone || !isBreak(e)) return;
+  if (shiftBreak) { shiftBreak = false; return; }
+  // גיבוי: אם הדפדפן בכל זאת הכניס ירידת שורה מהמקלדת שעל המסך, מוחקים אותה ושולחים
+  input.value = input.value.replace(/\\n$/, "");
+  if (input.value.trim()) submitNow();
+});
+input.addEventListener("keyup", (e) => { if (e.key === "Shift") shiftBreak = false; });
 input.addEventListener("input", () => { input.style.height = "auto"; input.style.height = Math.min(input.scrollHeight, 140) + "px"; });
 load();
 </script>

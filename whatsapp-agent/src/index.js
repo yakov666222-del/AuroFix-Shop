@@ -703,7 +703,7 @@ http
 
     // ---------- צ'אט באתר ----------
     if (url.pathname === "/chat" && req.method === "GET") {
-      res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+      res.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" });
       return res.end(CHAT_HTML);
     }
     if (url.pathname === "/chat/history" && req.method === "GET") {
