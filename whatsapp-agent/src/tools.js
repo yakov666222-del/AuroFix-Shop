@@ -92,6 +92,33 @@ const LAB_TOOLS = [
     }),
   },
   {
+    name: "lab_read",
+    description:
+      "קורא כל דבר ממערכת המעבדה. resource אחד מ: " +
+      Object.entries(lab.READ_RESOURCES).map(([k, v]) => `${k.replace("*", "")} (${v}${k.endsWith("*") ? ", צריך id" : ""})`).join("; ") +
+      ". query מסנן לפי טקסט (שם לקוח, דגם, טלפון). קריאה לא משנה כלום, אפשר בלי לשאול.",
+    strict: true,
+    input_schema: strict({
+      resource: { type: "string", enum: Object.keys(lab.READ_RESOURCES).map((k) => k.replace("*", "")) },
+      id: { type: "string", description: "מזהה, או ריק" },
+      query: { type: "string", description: "טקסט לסינון, או ריק" },
+    }),
+  },
+  {
+    name: "propose_lab_action",
+    description:
+      "מציע כל פעולה במערכת המעבדה (יצירה, עדכון, מחיקה). הפעולה לא מתבצעת עד שהבעלים עונה 'כן'. פעולות: " +
+      Object.entries(lab.ACTIONS).map(([k, v]) => `${k}: ${v.d}`).join("; ") +
+      ". fields הוא JSON עם השדות לשינוי בלבד. קודם קרא עם lab_read כדי לקבל id ונתונים נכונים. אחרי ההצעה, כתוב לבעלים בשורה-שתיים מה בדיוק ישתנה ושאל אם לאשר.",
+    strict: true,
+    input_schema: strict({
+      action: { type: "string", enum: Object.keys(lab.ACTIONS) },
+      id: { type: "string", description: "מזהה הרשומה (תיקון/פריט/הזמנה/תשלום/עובד/משמרת), או ריק ביצירה" },
+      fields_json: { type: "string", description: "אובייקט JSON עם השדות, למשל {\"status\":\"ready\"}. {} אם אין" },
+      summary: { type: "string", description: "תיאור קצר בעברית של מה שיקרה, לבעלים" },
+    }),
+  },
+  {
     name: "find_repairs",
     description: "מחפש תיקונים במערכת המעבדה לפי שם לקוח, דגם, תיאור או מספר תיקון. query ריק או 'פתוחים' מחזיר את כל התיקונים הפתוחים.",
     strict: true,
@@ -263,6 +290,23 @@ export async function runTool(name, input, ctx) {
 
     case "mark_ordered":
       return lab.markOrdered(input.item_id, input.qty, input.note);
+
+    case "lab_read":
+      return lab.labRead(input.resource, input.id, input.query);
+
+    case "propose_lab_action": {
+      if (!lab.ACTIONS[input.action]) return "פעולה לא מוכרת.";
+      if (lab.NEEDS_ID(input.action) && !input.id) return "חסר id. קרא קודם עם lab_read.";
+      let fields;
+      try {
+        fields = JSON.parse(input.fields_json || "{}");
+        if (typeof fields !== "object" || Array.isArray(fields) || fields === null) throw 0;
+      } catch {
+        return "fields_json לא תקין. צריך אובייקט JSON.";
+      }
+      pendingChanges.push({ ts: Date.now(), kind: "action", action: input.action, id: input.id, fields, summary: input.summary });
+      return `ההצעה נשמרה וממתינה לאישור: ${input.summary}. עכשיו כתוב לבעלים מה ישתנה ושאל אם לאשר. הוא עונה "כן" או "לא".`;
+    }
 
     case "find_repairs":
       return lab.findRepairs(input.query);

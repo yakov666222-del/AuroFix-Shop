@@ -31,7 +31,12 @@ async function api(path, opts = {}) {
     if (!res) throw new Error("מערכת המעבדה לא עונה כרגע.");
   }
   if (!res.ok) throw new Error(`מערכת המעבדה החזירה שגיאה ${res.status}: ${(await res.text()).slice(0, 200)}`);
-  return res.json();
+  const body = await res.text();
+  try {
+    return JSON.parse(body);
+  } catch {
+    return body; // פעולות כמו מחיקה מחזירות טקסט ולא JSON
+  }
 }
 
 const norm = (s) => String(s ?? "").toLowerCase().replace(/[\s\-_/]+/g, " ").trim();
@@ -202,4 +207,105 @@ export async function labIncomeForYear(year) {
   return payments
     .filter((p) => new Date(p.payment_date || p.created_at).getFullYear() === year)
     .reduce((sum, p) => sum + Number(p.total_received || 0), 0);
+}
+
+
+// ======================================================================
+// גישה מלאה למערכת המעבדה: קריאה חופשית, ופעולות שמתבצעות רק אחרי "כן" מהבעלים
+// ======================================================================
+const enc = encodeURIComponent;
+const short = (v, n = 3500) => {
+  const t = typeof v === "string" ? v : JSON.stringify(v, null, 0);
+  return t.length > n ? t.slice(0, n) + `… (נחתך, ${t.length} תווים)` : t;
+};
+
+// מה אפשר לקרוא. id נדרש רק במקומות שמסומנים בכוכבית
+export const READ_RESOURCES = {
+  repairs: "כל התיקונים",
+  "repair*": "תיקון אחד לפי מספר",
+  "repair_parts*": "החלקים בתיקון",
+  "repair_payments*": "התשלומים של תיקון",
+  customers: "כל הלקוחות",
+  inventory: "כל המלאי",
+  "inventory_item*": "פריט מלאי לפי id",
+  pending_orders: "הזמנות ממתינות",
+  payments: "כל התשלומים",
+  employees: "עובדים",
+  shifts: "משמרות",
+  shifts_summary: "סיכום שעות עבודה",
+  analytics: "נתונים וסטטיסטיקה",
+};
+
+export async function labRead(resource, id, query) {
+  const paths = {
+    repairs: "/api/repairs",
+    repair: `/api/repairs/${enc(id)}`,
+    repair_parts: `/api/repairs/${enc(id)}/parts`,
+    repair_payments: `/api/repairs/${enc(id)}/payments`,
+    customers: "/api/customers",
+    inventory: "/api/inventory",
+    inventory_item: `/api/inventory/${enc(id)}`,
+    pending_orders: "/api/pending_orders",
+    payments: "/api/payments",
+    employees: "/api/employees",
+    shifts: "/api/shifts",
+    shifts_summary: "/api/shifts/summary",
+    analytics: "/api/analytics",
+  };
+  if (!paths[resource]) return `אין משאב כזה. אפשר: ${Object.keys(READ_RESOURCES).join(", ")}`;
+  if (READ_RESOURCES[resource + "*"] && !id) return "צריך id בשביל זה.";
+  let data = await api(paths[resource]);
+  // סינון חופשי לפי טקסט (שם, דגם, טלפון...) כדי לא להחזיר רשימות ענקיות
+  if (Array.isArray(data) && query) {
+    const words = norm(query).split(" ").filter(Boolean);
+    data = data.filter((row) => {
+      const hay = norm(Object.values(row).join(" "));
+      return words.every((w) => hay.includes(w));
+    });
+  }
+  if (Array.isArray(data)) return `${data.length} רשומות:\n` + short(data.slice(0, 40));
+  return short(data);
+}
+
+// הפעולות. method + path + האם צריך למזג עם הרשומה הקיימת (כשהמערכת מצפה לרשומה מלאה בעדכון)
+export const ACTIONS = {
+  create_repair: { m: "POST", p: () => "/api/repairs", d: "פתיחת תיקון חדש (device, client, customer_id, desc, labor, deposit, total, notes, status)" },
+  update_repair: { m: "PUT", p: (id) => `/api/repairs/${enc(id)}`, d: "עדכון תיקון: סטטוס (received/diagnosing/in_progress/ready/delivered/returned_no_repair), מחיר, הערות, אמצעי תשלום וכו'" },
+  delete_repair: { m: "DELETE", p: (id) => `/api/repairs/${enc(id)}`, d: "מחיקת תיקון" },
+  add_repair_part: { m: "POST", p: (id) => `/api/repairs/${enc(id)}/parts`, d: "הוספת חלק מהמלאי לתיקון (inventory_id, qty, price). יורד מהמלאי" },
+  remove_repair_part: { m: "DELETE", p: (id, f) => `/api/repairs/${enc(id)}/parts/${enc(f.part_id)}`, d: "הסרת חלק מתיקון (part_id)" },
+  create_customer: { m: "POST", p: () => "/api/customers", d: "לקוח חדש (name, phone, email, notes)" },
+  create_inventory_item: { m: "POST", p: () => "/api/inventory", d: "פריט מלאי חדש (name, sku, cat, cost, price, qty, min, reorder_qty, loc, supplier, notes)" },
+  update_inventory_item: { m: "PUT", p: (id) => `/api/inventory/${enc(id)}`, merge: (id) => `/api/inventory/${enc(id)}`, d: "עדכון פרטי פריט (מחיר, מינימום, ספק, מיקום וכו')" },
+  delete_inventory_item: { m: "DELETE", p: (id) => `/api/inventory/${enc(id)}`, d: "מחיקת פריט מהמלאי" },
+  adjust_inventory: { m: "PATCH", p: (id) => `/api/inventory/${enc(id)}/adjust`, d: "שינוי כמות (delta, notes)" },
+  create_order: { m: "POST", p: () => "/api/pending_orders", d: "הזמנה ממתינה חדשה (name, sku, qty_ordered, cost, supplier, expected_at, notes)" },
+  update_order: { m: "PUT", p: (id) => `/api/pending_orders/${enc(id)}`, mergeList: "/api/pending_orders", d: "עדכון הזמנה ממתינה" },
+  receive_order: { m: "POST", p: (id) => `/api/pending_orders/${enc(id)}/receive`, d: "סימון הזמנה כהתקבלה (הכמות נכנסת למלאי)" },
+  delete_order: { m: "DELETE", p: (id) => `/api/pending_orders/${enc(id)}`, d: "מחיקת הזמנה ממתינה" },
+  create_payment: { m: "POST", p: () => "/api/payments", d: "רישום תשלום (repair_id, cash_amount, card_amount, bank_transfer_amount, check_amount, payment_date, notes)" },
+  delete_payment: { m: "DELETE", p: (id) => `/api/payments/${enc(id)}`, d: "מחיקת תשלום" },
+  create_employee: { m: "POST", p: () => "/api/employees", d: "עובד חדש (name, pin)" },
+  update_employee: { m: "PUT", p: (id) => `/api/employees/${enc(id)}`, mergeList: "/api/employees", d: "עדכון עובד (name, active, notes)" },
+  delete_employee: { m: "DELETE", p: (id) => `/api/employees/${enc(id)}`, d: "מחיקת עובד" },
+  clock_shift: { m: "POST", p: () => "/api/shifts/clock", d: "כניסה/יציאה ממשמרת (employee_id)" },
+  update_shift: { m: "PUT", p: (id) => `/api/shifts/${enc(id)}`, d: "תיקון משמרת (clock_in, clock_out, notes)" },
+  delete_shift: { m: "DELETE", p: (id) => `/api/shifts/${enc(id)}`, d: "מחיקת משמרת" },
+};
+export const NEEDS_ID = (a) => /^(update|delete|add_repair_part|remove_repair_part|adjust|receive)/.test(a);
+
+export async function runAction(action, id, fields = {}) {
+  const A = ACTIONS[action];
+  if (!A) throw new Error("פעולה לא מוכרת");
+  let body = { ...fields };
+  if (A.merge) body = { ...(await api(A.merge(id))), ...fields };
+  if (A.mergeList) {
+    const cur = (await api(A.mergeList)).find((r) => String(r.id) === String(id));
+    if (!cur) throw new Error("הרשומה לא נמצאה");
+    body = { ...cur, ...fields };
+  }
+  if (action === "adjust_inventory") body = { delta: Number(fields.delta), reason: "WHATSAPP_ADVISOR", notes: fields.notes || "" };
+  const opts = { method: A.m };
+  if (A.m !== "DELETE" && A.m !== "GET") opts.body = JSON.stringify(body);
+  return api(A.p(id, fields), opts);
 }

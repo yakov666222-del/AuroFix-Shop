@@ -24,6 +24,7 @@ import * as cloud from "./cloud.js";
 import { CHAT_HTML, MANIFEST, SW_JS } from "./chat-page.js";
 import * as push from "./push.js";
 import { openItems } from "./checklist.js";
+import { handleShortcut } from "./shortcut.js";
 
 const logger = pino({ level: process.env.LOG_LEVEL || "warn" });
 const TAKEOVER_MIN = Number(process.env.TAKEOVER_MINUTES || 60);
@@ -232,10 +233,19 @@ async function handleConfirmation(text) {
   if (!changes.length) return null;
   let reply;
   if (NO.test(text)) {
-    reply = "בוטל, לא שיניתי כלום במלאי.";
+    reply = "בוטל, לא שיניתי כלום.";
   } else {
     const lines = [];
     for (const c of changes) {
+      if (c.kind === "action") {
+        try {
+          await lab.runAction(c.action, c.id, c.fields);
+          lines.push(`✅ ${c.summary}`);
+        } catch (e) {
+          lines.push(`⚠️ ${c.summary}: לא הצלחתי (${e.message})`);
+        }
+        continue;
+      }
       try {
         const r = await lab.adjustInventory(c.id, c.delta, c.reason);
         lines.push(`✅ ${c.name}: ${c.delta > 0 ? "+" : ""}${c.delta}, עכשיו במלאי ${r.qty}`);
@@ -243,7 +253,7 @@ async function handleConfirmation(text) {
         lines.push(`⚠️ ${c.name}: לא הצלחתי לעדכן (${e.message})`);
       }
     }
-    reply = `עודכן במלאי:\n${lines.join("\n")}`;
+    reply = `בוצע:\n${lines.join("\n")}`;
   }
   appendHistory(OWNER_KEY, text, reply, 120); // כדי שהמלווה יידע מה קרה
   return reply;
@@ -743,6 +753,32 @@ http
       const reply = (await ownerReply(String(body.text || "").slice(0, 4000), images, false)) || "";
       res.writeHead(200, { "Content-Type": "application/json" });
       return res.end(JSON.stringify({ reply }));
+    }
+    // ---------- קיצור Apple Shortcuts ("עוזר יעקב"): הוראה בעברית -> פעולה באייפון ----------
+    if (url.pathname === "/shortcut" && req.method === "POST") {
+      const chunks = [];
+      let size = 0;
+      for await (const c of req) {
+        size += c.length;
+        if (size > 64 * 1024) break;
+        chunks.push(c);
+      }
+      const raw = Buffer.concat(chunks).toString("utf8");
+      let text = "";
+      try {
+        text = String(JSON.parse(raw).text ?? "");
+      } catch {
+        text = new URLSearchParams(raw).get("text") || raw;
+      }
+      const proto = req.headers["x-forwarded-proto"] || "https";
+      const origin = req.headers.host ? `${proto}://${req.headers.host}` : "";
+      const out = await handleShortcut(text.slice(0, 2000), {
+        origin,
+        key: secret,
+        ask: async (t) => (await ownerReply(t, [], false)) || "",
+      }).catch((e) => ({ action: "say", speak: `⚠️ שגיאה: ${e.message}` }));
+      res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
+      return res.end(JSON.stringify(out));
     }
     if (req.method === "POST" && url.pathname === "/apikey") {
       const k = (await readBody(req)).get("apikey")?.trim() || "";
