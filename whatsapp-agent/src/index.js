@@ -341,7 +341,13 @@ async function ownerReply(text, images, isVoice, { voice = false } = {}) {
     replyAppendix.length = 0;
     const reply = await runAgent("owner", OWNER_KEY, text, images, { sendText, notifyOwner, chatJid: selfJid || OWNER_KEY });
     // רשימות שהקוד בנה מהמערכת מצורפות כמו שהן. בהודעה קולית הן נשלחות כטקסט (אחרי "פרטים:")
-    const extra = replyAppendix.splice(0).join("\n\n");
+    let extra = replyAppendix.splice(0).join("\n\n");
+    // היא כותבת "בוצע/עדכנתי" אבל שום שינוי לא נעשה בפועל בתור הזה: אומרים לבעלים את האמת
+    if (/בוצע|עודכנ|עדכנתי|עידכנתי|הכנסתי למערכת|שיניתי במערכת|רשמתי במערכת/.test(String(reply)) && !extra.includes("🧾")) {
+      const warn = "⚠️ בדיקת מערכת: בתשובה הזו לא נעשה שום שינוי בפועל במערכת המעבדה. אם ביקשת עדכון, כתוב שוב מה לעדכן.";
+      auditLog({ action: "claim_without_change", summary: String(reply).slice(0, 200), ok: false });
+      extra = extra ? `${warn}\n\n${extra}` : warn;
+    }
     // רשימה עם עלויות שהיא כתבה בעצמה (בלי הכלי שבונה רשימות מהמערכת): מסמנים שהיא לא נבדקה
     if (!extra.includes("📋") && (String(reply).match(/עלות/g) || []).length >= 3) {
       const warn = "⚠️ הרשימה הזו נכתבה בלי בדיקה מול המערכת. לנתונים המדויקים כתוב: \"תני רשימה מהמערכת\".";
