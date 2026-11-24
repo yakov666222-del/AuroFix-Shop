@@ -17,7 +17,7 @@ function client(apiKey) {
   return ai;
 }
 
-// מוצאים לבד אילו דגמים זמינים למפתח: קודם flash-lite (מהיר), אחר כך flash (חכם יותר)
+// מוצאים לבד אילו דגמים זמינים למפתח: קודם flash (מדויק), אחר כך flash-lite (גיבוי)
 let modelsCache = null;
 const ver = (n) => (n.match(/gemini-(\d+(?:\.\d+)?)/)?.[1] ?? "0").split(".").map(Number);
 const newer = (a, b) => { const [x, y] = [ver(a), ver(b)]; return (y[0] - x[0]) || ((y[1] ?? 0) - (x[1] ?? 0)); };
@@ -33,8 +33,9 @@ async function models(apiKey) {
   const plain = names.filter((n) => /^gemini-[\d.]+-flash(-lite)?$/.test(n));
   const lite = plain.filter((n) => n.endsWith("-lite")).sort(newer);
   const flash = plain.filter((n) => !n.endsWith("-lite")).sort(newer);
-  modelsCache = [...lite.slice(0, 2), ...flash.slice(0, 2)];
-  if (!modelsCache.length) modelsCache = ["gemini-3.5-flash-lite", "gemini-3.5-flash"];
+  // קודם flash (מדויק יותר עם נתונים ושמות), ו-flash-lite רק כגיבוי כשהמכסה נגמרת או שיש עומס
+  modelsCache = [...flash.slice(0, 2), ...lite.slice(0, 2)];
+  if (!modelsCache.length) modelsCache = ["gemini-3.5-flash", "gemini-3.5-flash-lite"];
   return modelsCache;
 }
 

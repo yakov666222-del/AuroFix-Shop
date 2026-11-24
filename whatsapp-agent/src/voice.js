@@ -1,11 +1,11 @@
 // הודעות קוליות: הופכים את התשובה של היועץ לקול בעברית, בפורמט של הודעה קולית בווטסאפ (OGG/Opus).
-// הקול: הקריינות של Microsoft (he-IL-AvriNeural), בלי מפתח ובלי תשלום. אם היא לא זמינה, הקריינות של Google Translate.
+// הקול: הקריינות של Microsoft (he-IL-HilaNeural, קול אישה), בלי מפתח ובלי תשלום. אם היא לא זמינה, הקריינות של Google Translate.
 // ההמרה ל-OGG נעשית עם ffmpeg-static (קובץ ffmpeg שמגיע עם החבילה, בלי התקנה בשרת).
 import { spawn } from "node:child_process";
 import ffmpegPath from "ffmpeg-static";
 import { MsEdgeTTS, OUTPUT_FORMAT } from "msedge-tts";
 
-const VOICE = process.env.TTS_VOICE || "he-IL-AvriNeural"; // קול גבר. קול אישה: he-IL-HilaNeural
+const VOICE = process.env.TTS_VOICE || "he-IL-HilaNeural"; // קול אישה (הבעלים ביקש). קול גבר: he-IL-AvriNeural
 const MAX_CHARS = 1800; // בערך שתי דקות דיבור
 
 // מנקים את הטקסט לפני הקראה: בלי אימוג'י, בלי כוכביות של הדגשה, בלי קישורים ובלי טבלאות

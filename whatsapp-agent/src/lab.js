@@ -39,7 +39,9 @@ async function api(path, opts = {}) {
   }
 }
 
-const norm = (s) => String(s ?? "").toLowerCase().replace(/[\s\-_/]+/g, " ").trim();
+// אותיות סופיות הופכות לרגילות, כדי ש"מסך" ימצא גם "מסכים" ו"סוללה" ימצא "סוללות"
+const FINALS = { "ך": "כ", "ם": "מ", "ן": "נ", "ף": "פ", "ץ": "צ" };
+const norm = (s) => String(s ?? "").toLowerCase().replace(/[ךםןףץ]/g, (c) => FINALS[c]).replace(/[\s\-_/]+/g, " ").trim();
 const money = (n) => `${Math.round(Number(n) || 0).toLocaleString("he-IL")} ₪`;
 
 function itemLine(i) {
@@ -52,9 +54,11 @@ function itemLine(i) {
 export async function searchInventory(query) {
   const items = await api("/api/inventory");
   const words = norm(query).split(" ").filter(Boolean);
+  // מילה כמו "מסך" או "מסכים" מתאימה גם לקטגוריה, אז "מסך" מחזיר את כל המסכים גם כשבשם לא כתוב "מסך"
+  const stem = (w) => w.replace(/(ימ|ות)$/, "").replace(/ה$/, "");
   const hits = items.filter((i) => {
     const hay = norm(`${i.name} ${i.sku} ${i.cat} ${i.supplier} ${i.notes}`);
-    return words.every((w) => hay.includes(w));
+    return words.every((w) => hay.includes(w) || hay.includes(stem(w)));
   });
   if (!hits.length) {
     // אין התאמה מלאה - מחזירים התאמות חלקיות כדי שהסוכן יוכל לשאול "התכוונת ל...?"
@@ -63,7 +67,8 @@ export async function searchInventory(query) {
       ? `לא נמצאה התאמה מדויקת ל"${query}". פריטים דומים:\n${partial.map(itemLine).join("\n")}`
       : `לא נמצא שום פריט שמתאים ל"${query}" במלאי (${items.length} פריטים במערכת).`;
   }
-  return hits.slice(0, 15).map(itemLine).join("\n");
+  const shown = hits.slice(0, 60);
+  return `${hits.length} פריטים (השמות בדיוק כמו במערכת, אל תשנה אותם):\n${shown.map(itemLine).join("\n")}${hits.length > shown.length ? `\n…ועוד ${hits.length - shown.length}. צמצם את החיפוש.` : ""}`;
 }
 
 // הזמנות שכבר יצאו לספק ועוד לא הגיעו (המסך "הזמנות ממתינות" במערכת המעבדה)
