@@ -788,6 +788,8 @@ http
     if (req.method === "POST" && url.pathname === "/apikey") {
       const k = (await readBody(req)).get("apikey")?.trim() || "";
       if (k.startsWith("sk-ant-")) fs.writeFileSync(path.join(DATA_DIR, "anthropic_key"), k, { mode: 0o600 });
+      // מפתח לחיפוש באינטרנט (Tavily)
+      else if (/^tvly-[A-Za-z0-9_\-]{10,}$/.test(k)) fs.writeFileSync(path.join(DATA_DIR, "tavily_key"), k, { mode: 0o600 });
       // מפתחות של גוגל מתחילים ב-AIza (פורמט ישן) או ב-AQ. (פורמט חדש)
       else if (/^[A-Za-z0-9._\-]{30,}$/.test(k)) fs.writeFileSync(path.join(DATA_DIR, "gemini_key"), k, { mode: 0o600 });
       else return back("זה לא נראה כמו מפתח. ודא שהעתקת את כולו, בלי רווחים (לחץ Copy key)");
@@ -868,6 +870,14 @@ http
 <form method="post" action="/apikey${self}"><input name="apikey" placeholder="AQ... או AIza..." autocomplete="off" required><button>שמור</button></form>
 <small>המפתח נשמר רק בשרת שלך. (אפשר גם מפתח של Claude שמתחיל ב-sk-ant-)</small></div>`;
       return res.end(page(body));
+    }
+    // חיפוש באינטרנט (לסקר שוק): מפתח Tavily חינמי
+    {
+      const hasTavily = Boolean(process.env.TAVILY_API_KEY || fs.existsSync(path.join(DATA_DIR, "tavily_key")));
+      body += `<div class="card"><h2>🌐 חיפוש באינטרנט ${hasTavily ? "✅ מחובר" : "(לא מחובר)"}</h2>
+${hasTavily ? "<p>היועץ יכול לחפש באינטרנט ולעשות סקר שוק. אפשר להחליף מפתח כאן:</p>" : `<p>כדי שהיועץ יוכל לחפש באינטרנט ולעשות סקר שוק, צריך מפתח חינמי של Tavily (1,000 חיפושים בחודש, בלי כרטיס אשראי).</p>
+<ol><li>פתח את <a href="https://app.tavily.com" target="_blank">app.tavily.com</a> והירשם עם גוגל</li><li>בדף הראשי מופיע <b>API Key</b> שמתחיל ב-tvly-. לחץ על ההעתקה</li><li>הדבק כאן:</li></ol>`}
+<form method="post" action="/apikey${self}"><input name="apikey" placeholder="tvly-..." autocomplete="off" required><button>שמור</button></form></div>`;
     }
 
     // שלב 2: חיבור לווטסאפ
