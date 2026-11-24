@@ -367,7 +367,17 @@ async function onCloudMessage(m) {
     console.log("📩 הודעה ממספר אחר, לא עונים");
     return;
   }
-  cloud.markRead(m.id);
+  // "מקליד..." מיד, ומתחדש כל 20 שניות עד שהתשובה נשלחת, כדי שיהיה ברור שהיא עובדת על זה
+  cloud.markRead(m.id, { typing: true });
+  const typing = setInterval(() => cloud.markRead(m.id, { typing: true }), 20_000);
+  try {
+    await handleCloudOwnerMessage(m);
+  } finally {
+    clearInterval(typing);
+  }
+}
+
+async function handleCloudOwnerMessage(m) {
   // מתי הבעלים כתב לאחרונה: ממנו נספרות 24 השעות שבהן מותר לשלוח לו בחינם
   settings.lastOwnerMsg = Number(m.timestamp) * 1000 || Date.now();
   saveSettings();

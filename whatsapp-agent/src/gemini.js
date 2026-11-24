@@ -42,12 +42,29 @@ async function models(apiKey) {
 const withTimeout = (p, ms) =>
   Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(Object.assign(new Error("timeout"), { status: 504 })), ms))]);
 
+// דגם שנגמרה לו המכסה (429) או שעמוס (503) מדלגים עליו לזמן מה, במקום לנסות אותו שוב בכל שלב
+const blockedUntil = new Map();
+// "חשיבה" מינימלית בדגמי Gemini 3 קלים: חוסכת הרבה זמן בפעולות פשוטות (בבדיקה: מ-9.7 שניות לחצי שנייה)
+const thinkingFor = (model) => (/^gemini-3/.test(model) ? { thinkingLevel: /-lite$/.test(model) ? "minimal" : "low" } : null);
+const noThinking = new Set(); // דגמים שלא מקבלים את ההגדרה
+
 async function generate(apiKey, params) {
   let lastErr;
   let emptyReason = null;
-  for (const model of await models(apiKey)) {
+  const all = await models(apiKey);
+  const open = all.filter((m) => (blockedUntil.get(m) || 0) < Date.now());
+  for (const model of open.length ? open : all) {
     try {
-      const res = await withTimeout(client(apiKey).models.generateContent({ model, ...params }), 45000);
+      const think = !noThinking.has(model) && thinkingFor(model);
+      const config = think && !params.config?.thinkingConfig ? { ...params.config, thinkingConfig: think } : params.config;
+      let res;
+      try {
+        res = await withTimeout(client(apiKey).models.generateContent({ model, ...params, config }), 30000);
+      } catch (e) {
+        if ((e?.status ?? e?.code) !== 400 || !think) throw e;
+        noThinking.add(model); // הדגם לא תומך בהגדרת החשיבה: מנסים שוב בלעדיה
+        res = await withTimeout(client(apiKey).models.generateContent({ model, ...params }), 30000);
+      }
       // תשובה ריקה (בלי טקסט ובלי קריאה לכלי): מנסים את הדגם הבא במקום להחזיר כלום
       if (!(res.text || "").trim() && !res.functionCalls?.length) {
         const c = res.candidates?.[0];
@@ -60,6 +77,7 @@ async function generate(apiKey, params) {
       lastErr = e;
       const code = e?.status ?? e?.code;
       if (![404, 429, 500, 503, 504].includes(code)) throw e; // שגיאה אחרת: לא מנסים דגם אחר
+      blockedUntil.set(model, Date.now() + (code === 429 || code === 404 ? 30 : 3) * 60_000);
       console.log(`⚠️ Gemini ${model} לא זמין (${code}), מנסה דגם אחר`);
     }
   }

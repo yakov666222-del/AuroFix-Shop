@@ -91,11 +91,14 @@ export async function cloudSendButtons(toPhone, text, buttons) {
 // טקסט של לחיצה על כפתור (בפורמט של Meta)
 export const buttonText = (m) => m.interactive?.button_reply?.title || m.interactive?.list_reply?.title || m.button?.text || "";
 
-export async function markRead(messageId) {
-  await graph(`${cfg.phoneNumberId}/messages`, {
-    method: "POST",
-    body: JSON.stringify({ messaging_product: "whatsapp", status: "read", message_id: messageId }),
-  }).catch(() => {});
+// סימון "נקרא" + "מקליד..." (ווטסאפ מציג את זה עד 25 שניות או עד שנשלחת תשובה)
+export async function markRead(messageId, { typing = false } = {}) {
+  const body = { messaging_product: "whatsapp", status: "read", message_id: messageId };
+  if (typing) body.typing_indicator = { type: "text" };
+  await graph(`${cfg.phoneNumberId}/messages`, { method: "POST", body: JSON.stringify(body) }).catch(() => {
+    // אם "מקליד" לא נתמך, לפחות מסמנים שנקרא
+    if (typing) return graph(`${cfg.phoneNumberId}/messages`, { method: "POST", body: JSON.stringify({ messaging_product: "whatsapp", status: "read", message_id: messageId }) }).catch(() => {});
+  });
 }
 
 export async function downloadImage(mediaId, directUrl) {
