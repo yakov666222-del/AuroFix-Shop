@@ -42,6 +42,10 @@ async function models(apiKey) {
 const withTimeout = (p, ms) =>
   Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(Object.assign(new Error("timeout"), { status: 504 })), ms))]);
 
+// כשיש מוח גיבוי (Claude), לא עושים סבב שני ארוך: עוברים אליו מהר
+let quickFail = false;
+export function setQuickFail(v) { quickFail = Boolean(v); }
+
 // דגם שנגמרה לו המכסה (429) או שעמוס (503) מדלגים עליו לזמן מה, במקום לנסות אותו שוב בכל שלב
 const blockedUntil = new Map();
 // "חשיבה" מינימלית בדגמי Gemini 3 קלים: חוסכת הרבה זמן בפעולות פשוטות (בבדיקה: מ-9.7 שניות לחצי שנייה)
@@ -56,7 +60,7 @@ async function generate(apiKey, params) {
   const list = open.length ? open : all;
   // סבב שני: אם כל הדגמים עמוסים, מחכים רגע ומנסים שוב את הדגם הקל, עם זמן המתנה ארוך
   const fallback = all.filter((m) => /-lite$/.test(m)).slice(0, 1);
-  const tries = [...list.map((m) => [m, 30000]), ...fallback.map((m) => [m, 90000, true])];
+  const tries = [...list.map((m) => [m, quickFail ? 25000 : 30000]), ...(quickFail ? [] : fallback.map((m) => [m, 90000, true]))];
   for (const [model, waitMs, isRetry] of tries) {
     if (isRetry) await new Promise((r) => setTimeout(r, 3000));
     try {

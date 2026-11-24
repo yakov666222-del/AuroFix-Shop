@@ -4,7 +4,7 @@ import path from "node:path";
 import Anthropic from "@anthropic-ai/sdk";
 import { CUSTOMER_TOOLS, OWNER_TOOLS, runTool } from "./tools.js";
 import { DATA_DIR, getHistory, appendHistory, memory } from "./store.js";
-import { runGemini, runWebTool, WEB_CLIENT_TOOLS } from "./gemini.js";
+import { runGemini, runWebTool, setQuickFail, WEB_CLIENT_TOOLS } from "./gemini.js";
 import { replyAppendix } from "./tools.js";
 import { checklistBlock } from "./checklist.js";
 
@@ -31,7 +31,7 @@ function getClient() {
   if (!client || client.apiKey !== apiKey) client = new Anthropic({ apiKey, maxRetries: 1, timeout: 60_000 });
   return client;
 }
-// Haiku 5.5: מהיר וזול (כ-15 ש"ח בחודש בשימוש של הבעלים). Gemini החינמי נשאר גיבוי
+// Haiku 5.5: גיבוי בתשלום, רק כש-Gemini החינמי עמוס (מהיר וזול)
 const MODEL = process.env.CLAUDE_MODEL || "claude-haiku-5-5";
 const OWNER_NAME = process.env.OWNER_NAME || "יעקב";
 const BUSINESS_NAME = process.env.BUSINESS_NAME || "AuroFix";
@@ -237,19 +237,22 @@ function sources(content) {
 export async function runAgent(mode, key, text, images, ctx) {
   const isOwner = mode === "owner";
   if (!provider()) throw new Error("עדיין לא הוגדר מפתח. פתח את עמוד ההגדרה והדבק מפתח של Gemini או Claude.");
-  if (provider() === "gemini") return runViaGemini(isOwner, key, text, images, ctx);
-  // Claude (Haiku) הוא המוח הראשי. אם הוא נופל (עומס, תקלה, נגמר הקרדיט), עוברים ל-Gemini החינמי
+  // Gemini החינמי הוא המוח הראשי. Claude Haiku (בתשלום) נכנס רק כש-Gemini עמוס, איטי או לא עונה
+  if (!claudeKey()) return runViaGemini(isOwner, key, text, images, ctx);
+  if (!geminiKey()) return runViaClaude(isOwner, key, text, images, ctx);
   try {
-    return await runViaClaude(isOwner, key, text, images, ctx);
+    setQuickFail(true); // יש גיבוי, אז לא מחכים לסבב ארוך של Gemini
+    return await runViaGemini(isOwner, key, text, images, ctx);
   } catch (e) {
-    console.log(`⚠️ Claude לא זמין (${e?.status ?? ""} ${String(e?.message || e).slice(0, 120)}), עובר ל-Gemini`);
-    if (!geminiKey()) throw e;
+    console.log(`⚠️ Gemini לא ענה (${String(e?.message || e).slice(0, 100)}), עובר ל-Claude Haiku`);
     // אם כבר בוצע שינוי במערכת לפני הנפילה, לא מריצים שוב (כדי לא לעדכן פעמיים)
     if (replyAppendix.some((x) => x.startsWith("🧾"))) {
-      return "⚠️ באמצע העבודה המוח הראשי נפל. מה שכבר נכנס למערכת מופיע בדוח למטה. בדוק אותו לפני שמבקש שוב.";
+      return "⚠️ באמצע העבודה המוח החינמי נפל. מה שכבר נכנס למערכת מופיע בדוח למטה. בדוק אותו לפני שמבקש שוב.";
     }
     replyAppendix.length = 0;
-    return runViaGemini(isOwner, key, text, images, ctx);
+    return runViaClaude(isOwner, key, text, images, ctx);
+  } finally {
+    setQuickFail(false);
   }
 }
 
