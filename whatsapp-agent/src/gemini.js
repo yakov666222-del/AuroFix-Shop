@@ -210,6 +210,20 @@ async function readWebpage(url) {
   throw new Error("יותר מדי הפניות");
 }
 
+/** תמלול הודעה קולית בעברית. audio = { mime, data(base64) } */
+export async function transcribeAudio(apiKey, audio) {
+  const res = await generate(apiKey, {
+    contents: [{
+      role: "user",
+      parts: [
+        { inlineData: { mimeType: audio.mime.includes("ogg") ? "audio/ogg" : audio.mime, data: audio.data } },
+        { text: "תמלל את ההקלטה מילה במילה, בשפה שבה היא נאמרה (בדרך כלל עברית). החזר רק את התמלול, בלי הקדמה ובלי הערות. אם לא שומעים דיבור, החזר בדיוק: [שקט]" },
+      ],
+    }],
+  });
+  return (res.text || "").trim();
+}
+
 /**
  * לולאת שיחה עם Gemini.
  * @returns {{ text: string, sources: string[] }}

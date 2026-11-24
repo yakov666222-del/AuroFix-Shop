@@ -19,6 +19,7 @@ function readKey(envName, file) {
 const claudeKey = () => readKey("ANTHROPIC_API_KEY", "anthropic_key");
 const geminiKey = () => readKey("GEMINI_API_KEY", "gemini_key");
 export const getApiKey = () => claudeKey() || geminiKey();
+export const getGeminiKey = () => geminiKey();
 // אם יש מפתח של Claude משתמשים בו, אחרת ב-Gemini
 export const provider = () => (claudeKey() ? "claude" : geminiKey() ? "gemini" : null);
 

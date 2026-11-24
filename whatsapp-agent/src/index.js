@@ -16,12 +16,14 @@ import makeWASocket, {
   useMultiFileAuthState,
 } from "@whiskeysockets/baileys";
 import fs from "node:fs";
-import { OPENING, getApiKey, runAgent } from "./agent.js";
+import { OPENING, getApiKey, getGeminiKey, runAgent } from "./agent.js";
 import * as lab from "./lab.js";
 import { DATA_DIR, appendHistory, chats, clearHistory, convo, logMessage, memory, reminders, saveReminders, saveSettings, settings } from "./store.js";
 import { findChat, pendingChanges, phoneToJid } from "./tools.js";
 import * as cloud from "./cloud.js";
 import { CHAT_HTML, MANIFEST, SW_JS } from "./chat-page.js";
+import { synthesize } from "./voice.js";
+import { transcribeAudio } from "./gemini.js";
 import * as push from "./push.js";
 import { openItems } from "./checklist.js";
 import { handleShortcut } from "./shortcut.js";
@@ -362,9 +364,45 @@ async function onCloudMessage(m) {
   // מתי הבעלים כתב לאחרונה: ממנו נספרות 24 השעות שבהן מותר לשלוח לו בחינם
   settings.lastOwnerMsg = Number(m.timestamp) * 1000 || Date.now();
   saveSettings();
+  if (m.type === "audio") return handleOwnerVoice(m);
   const text = m.text?.body || cloud.buttonText(m) || m.image?.caption || "";
   const images = m.type === "image" ? [await cloud.downloadImage(m.image.id, m.image.url).catch(() => null)].filter(Boolean) : [];
-  await handleOwner(text, images, m.type === "audio");
+  await handleOwner(text, images, false);
+}
+
+// הודעה קולית מהבעלים: מתמללים, היועץ עונה, והתשובה חוזרת כהודעה קולית.
+// אם בתשובה יש קישורים, טבלה או הרבה פרטים, שולחים גם את הטקסט כדי שיהיה אפשר לקרוא ולהעתיק.
+async function handleOwnerVoice(m) {
+  const to = ownerChat();
+  let heard;
+  try {
+    const key = getGeminiKey();
+    if (!key) throw new Error("אין מפתח Gemini לתמלול");
+    const audio = await cloud.downloadAudio(m.audio?.id, m.audio?.url);
+    heard = await transcribeAudio(key, audio);
+  } catch (e) {
+    logger.error(e, "voice transcription failed");
+    return sendText(to, `🎤 לא הצלחתי לשמוע את ההודעה הקולית (${e.message}). נסה שוב או כתוב לי.`).catch(() => {});
+  }
+  if (!heard || heard === "[שקט]") return sendText(to, "🎤 לא שמעתי דיבור בהקלטה. נסה שוב?").catch(() => {});
+  logMessage(to, "owner", `🎤 ${heard}`);
+  const reply = await ownerReply(
+    `${heard}\n\n(נשלח כהודעה קולית. התשובה שלך תוקרא לו בקול: דבר בעברית טבעית ובמשפטים קצרים, בלי טבלאות, בלי רשימות ארוכות ובלי אימוג'י. אם צריך פרטים, קישורים או טבלה, כתוב אותם בסוף אחרי שורה "פרטים:".)`,
+    [],
+    false
+  );
+  if (!reply) return;
+  const [spoken, details] = reply.split(/\n\s*פרטים:\s*/);
+  const needsText = Boolean(details) || /https?:\/\/|\|/.test(reply) || reply.length > 900;
+  try {
+    const ogg = await synthesize(spoken || reply);
+    await cloud.cloudSendVoice(to.split("@")[0], ogg);
+    logMessage(to, "bot", `🔊 ${spoken || reply}`);
+    if (needsText) await sendText(to, details ? `📝 ${details}` : reply);
+  } catch (e) {
+    logger.error(e, "voice reply failed, sending text");
+    await sendText(to, reply).catch((err) => logger.error(err, "send reply"));
+  }
 }
 
 async function onMessage(m) {

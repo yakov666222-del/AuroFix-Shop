@@ -116,6 +116,43 @@ export async function downloadImage(mediaId, directUrl) {
   return { media_type: type, data: buf.toString("base64") };
 }
 
+// הורדת הקלטה קולית (עד 16MB). מחזיר { mime, data(base64) }
+export async function downloadAudio(mediaId, directUrl) {
+  let url = directUrl;
+  let mime = "audio/ogg";
+  if (!url) {
+    const meta = await graph(mediaId);
+    url = meta.url;
+    mime = meta.mime_type || mime;
+  }
+  const res = await fetch(url, { headers: authHeaders(), signal: AbortSignal.timeout(30000) });
+  if (!res.ok) throw new Error(`לא הצלחתי להוריד את ההקלטה (${res.status})`);
+  mime = (res.headers.get("content-type")?.split(";")[0] || mime).replace("application/octet-stream", "audio/ogg");
+  const buf = Buffer.from(await res.arrayBuffer());
+  if (buf.length > 16 * 1024 * 1024) throw new Error("ההקלטה ארוכה מדי");
+  return { mime, data: buf.toString("base64") };
+}
+
+// שליחת הודעה קולית: מעלים את הקובץ לווטסאפ ושולחים לפי המזהה שלו
+export async function cloudSendVoice(toPhone, oggBuf) {
+  const form = new FormData();
+  form.append("messaging_product", "whatsapp");
+  form.append("type", "audio/ogg");
+  form.append("file", new Blob([oggBuf], { type: "audio/ogg" }), "voice.ogg");
+  const up = await fetch(`${base()}/${cfg.phoneNumberId}/media`, { method: "POST", headers: authHeaders(), body: form, signal: AbortSignal.timeout(30000) });
+  const upData = await up.json().catch(() => ({}));
+  if (!up.ok || !upData.id) throw new Error(upData?.error?.message || `העלאת ההודעה הקולית נכשלה (${up.status})`);
+  try {
+    await graph(`${cfg.phoneNumberId}/messages`, {
+      method: "POST",
+      body: JSON.stringify({ messaging_product: "whatsapp", to: normPhone(toPhone), type: "audio", audio: { id: upData.id, voice: true } }),
+    });
+  } catch (e) {
+    if (e.code === 131047) throw new Error("ווטסאפ לא מאפשר לשלוח לו הודעה כי הוא לא כתב למספר של היועץ ב-24 השעות האחרונות.");
+    throw e;
+  }
+}
+
 // אימות שההודעה באמת הגיעה מ-Meta (אם הוגדר App Secret)
 export function validSignature(rawBody, headers) {
   if (!cfg.appSecret) return true;
@@ -157,7 +194,7 @@ function extractKapso(body) {
     const msg = { id: m.id, from, timestamp: m.timestamp, type: m.type };
     if (m.type === "text") msg.text = { body: m.text?.body || m.kapso?.content || "" };
     if (m.type === "image") msg.image = { id: m.image?.id, caption: m.image?.caption || "", url: m.kapso?.media_url };
-    if (m.type === "audio") msg.audio = {};
+    if (m.type === "audio") msg.audio = { id: m.audio?.id, url: m.kapso?.media_url, mime_type: m.audio?.mime_type, voice: m.audio?.voice };
     if (m.type === "interactive" || m.type === "button") {
       msg.interactive = m.interactive;
       msg.button = m.button;
