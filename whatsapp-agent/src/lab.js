@@ -51,6 +51,19 @@ function itemLine(i) {
   }${i.supplier ? ` | ספק: ${i.supplier}` : ""} | id=${i.id}`;
 }
 
+// אותו חיפוש, אבל מחזיר את הפריטים עצמם (בשביל רשימה שהקוד בונה, לא המודל)
+export async function findItems(query) {
+  const items = await api("/api/inventory");
+  const words = norm(query).split(" ").filter(Boolean);
+  const stem = (w) => w.replace(/(ימ|ות)$/, "").replace(/ה$/, "");
+  return items
+    .filter((i) => {
+      const hay = norm(`${i.name} ${i.sku} ${i.cat} ${i.supplier} ${i.notes}`);
+      return words.every((w) => hay.includes(w) || hay.includes(stem(w)));
+    })
+    .sort((a, b) => String(a.cat).localeCompare(String(b.cat), "he") || String(a.name).localeCompare(String(b.name), "he", { numeric: true }));
+}
+
 export async function searchInventory(query) {
   const items = await api("/api/inventory");
   const words = norm(query).split(" ").filter(Boolean);

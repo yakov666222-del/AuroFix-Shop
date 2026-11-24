@@ -19,7 +19,7 @@ import fs from "node:fs";
 import { OPENING, getApiKey, getGeminiKey, runAgent } from "./agent.js";
 import * as lab from "./lab.js";
 import { DATA_DIR, appendHistory, chats, clearHistory, convo, logMessage, memory, reminders, saveReminders, saveSettings, settings } from "./store.js";
-import { findChat, pendingChanges, phoneToJid } from "./tools.js";
+import { findChat, pendingChanges, phoneToJid, replyAppendix } from "./tools.js";
 import * as cloud from "./cloud.js";
 import { CHAT_HTML, MANIFEST, SW_JS } from "./chat-page.js";
 import { synthesize } from "./voice.js";
@@ -328,7 +328,7 @@ async function collectImage(m) {
 }
 
 // ---------- הודעה ממך ליועץ (משותף לכל הערוצים) ----------
-async function ownerReply(text, images, isVoice) {
+async function ownerReply(text, images, isVoice, { voice = false } = {}) {
   if (isVoice) return "🎤 עדיין אין לי אפשרות לשמוע הודעות קוליות. אפשר להקליד, או להשתמש בהכתבה של המקלדת (המיקרופון במקלדת).";
   text = text || "";
   if (!text && !images.length) return null;
@@ -337,7 +337,13 @@ async function ownerReply(text, images, isVoice) {
   const quick = text.startsWith("!") ? await handleCommand(text) : null;
   if (quick) return quick;
   try {
-    return await runAgent("owner", OWNER_KEY, text, images, { sendText, notifyOwner, chatJid: selfJid || OWNER_KEY });
+    replyAppendix.length = 0;
+    const reply = await runAgent("owner", OWNER_KEY, text, images, { sendText, notifyOwner, chatJid: selfJid || OWNER_KEY });
+    // רשימות שהקוד בנה מהמערכת מצורפות כמו שהן. בהודעה קולית הן נשלחות כטקסט (אחרי "פרטים:")
+    const extra = replyAppendix.splice(0).join("\n\n");
+    if (!extra) return reply;
+    appendHistory(OWNER_KEY, "[הרשימה שצורפה לתשובה הקודמת]", extra, 120);
+    return voice ? `${reply}\nפרטים:\n${extra}` : `${reply}\n\n${extra}`;
   } catch (e) {
     logger.error(e);
     return `⚠️ שגיאה: ${e.message}`;
@@ -389,10 +395,12 @@ async function handleOwnerVoice(m) {
   const reply = await ownerReply(
     `${heard}\n\n(נשלח כהודעה קולית. התשובה שלך תוקרא לו בקול: דבר בעברית טבעית ובמשפטים קצרים, בלי טבלאות, בלי רשימות ארוכות ובלי אימוג'י. אם צריך פרטים, קישורים או טבלה, כתוב אותם בסוף אחרי שורה "פרטים:".)`,
     [],
-    false
+    false,
+    { voice: true }
   );
   if (!reply) return;
-  const [spoken, details] = reply.split(/\n\s*פרטים:\s*/);
+  const [spoken, ...rest] = reply.split(/\n\s*פרטים:\s*/);
+  const details = rest.join("\n\n");
   const needsText = Boolean(details) || /https?:\/\/|\|/.test(reply) || reply.length > 900;
   try {
     const ogg = await synthesize(spoken || reply);

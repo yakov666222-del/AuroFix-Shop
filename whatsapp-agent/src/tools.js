@@ -7,6 +7,8 @@ import { CHECKLIST_TOOL, updateItem } from "./checklist.js";
 
 // שינויי מלאי שממתינים לאישור הבעלים ("כן"). מבוצעים רק ב-index.js, לא על ידי המודל.
 export const pendingChanges = [];
+// רשימות שהקוד בונה מהמערכת ומצורפות לתשובה כמו שהן (כדי שהמודל לא ישכתב שמות ומספרים)
+export const replyAppendix = [];
 
 const strict = (props, required = Object.keys(props)) => ({
   type: "object",
@@ -57,6 +59,16 @@ const LEDGER_TOOLS = [
 ];
 
 const LAB_TOOLS = [
+  {
+    name: "show_inventory_list",
+    description:
+      "מצרף לתשובה רשימת פריטים אמיתית מהמערכת (שם מדויק, כמות, עלות, מחיר נוכחי), בנויה על ידי הקוד ולא על ידיך. חובה להשתמש בזה בכל פעם שמציגים לבעלים יותר מפריט אחד מהמלאי (\"כל המסכים\", \"מחירון\", \"מה יש לי\"). אפשר להוסיף מחיר מוצע לכל פריט לפי id. אחרי הקריאה אל תכתוב את הרשימה בעצמך.",
+    strict: true,
+    input_schema: strict({
+      query: { type: "string", description: "מה לחפש, למשל 'מסך', 'סוללה', 'מסך jk', 'אינסל'" },
+      suggested_prices_json: { type: "string", description: "מחיר מכירה מוצע לפי id, למשל {\"inv-123\":350}. {} אם אין" },
+    }),
+  },
   {
     name: "search_inventory",
     description: "מחפש פריט במלאי של מערכת המעבדה (לפי שם, דגם, מק\"ט או קטגוריה) ומחזיר כמות, מינימום, עלות, מחיר ומזהה (id).",
@@ -280,6 +292,22 @@ export async function runTool(name, input, ctx) {
         labIncome !== null ? `\nתשלומים שנרשמו במערכת המעבדה: ${Math.round(labIncome)} ₪ (ייתכן שחלקם כבר דווחו גם בווטסאפ, אל תספור פעמיים)` : ""
       }
 רישומים אחרונים:\n${recent.join("\n") || "אין"}`;
+    }
+
+    case "show_inventory_list": {
+      const items = await lab.findItems(input.query);
+      if (!items.length) return `לא נמצאו פריטים שמתאימים ל"${input.query}". אמור לבעלים שלא נמצא.`;
+      let prices = {};
+      try { prices = JSON.parse(input.suggested_prices_json || "{}") || {}; } catch {}
+      const r = (n) => `${Math.round(Number(n) || 0)} ₪`;
+      const lines = items.map((i, n) => {
+        const sug = prices[i.id];
+        const warn = Number(i.price) > 0 && Number(i.price) < Number(i.cost) ? " ⚠️ מחיר מתחת לעלות" : "";
+        return `${n + 1}. ${i.name} | כמות: ${i.qty} | עלות: ${r(i.cost)} | מחיר עכשיו: ${r(i.price)}${sug ? ` | מוצע: ${r(sug)}` : ""}${warn}`;
+      });
+      replyAppendix.push(`📋 מהמערכת (${items.length} פריטים):\n${lines.join("\n")}`);
+      const unknown = Object.keys(prices).filter((id) => !items.some((i) => i.id === id));
+      return `הרשימה (${items.length} פריטים) תצורף לתשובה שלך אוטומטית, בדיוק כמו במערכת. אל תכתוב אותה ואל תמנה פריטים בעצמך. כתוב רק משפט אחד או שניים (למשל מה ההיגיון של המחירים המוצעים, או מה לעשות הלאה).${unknown.length ? ` שים לב: המזהים ${unknown.join(", ")} לא נמצאו ברשימה ולא הוצגו.` : ""}\nלשימושך (לא להעתיק): ${items.map((i) => `${i.id}=${i.name}`).join("; ")}`;
     }
 
     case "search_inventory":
