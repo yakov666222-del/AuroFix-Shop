@@ -75,7 +75,9 @@ const webInbox = (() => {
 })();
 const saveInbox = () => fs.writeFileSync(INBOX_FILE, JSON.stringify(webInbox.slice(-50)));
 // הצ'אט שבו הבעלים באמת כותב ליועץ (בחשבונות חדשים זה לפעמים כתובת LID ולא המספר)
-const ownerChat = () => settings.ownerChatJid || selfJid;
+// בווטסאפ הרשמי (Kapso) שולחים תמיד למספר של הבעלים. כתובת ה-LID הישנה (מהחיבור הקודם) לא עובדת שם,
+// ובגללה תזכורות והודעות יזומות נפלו בשקט לצ'אט באתר.
+const ownerChat = () => (cloud.cloudEnabled() ? `${cloud.normPhone(cloud.cfg.ownerPhone)}@s.whatsapp.net` : settings.ownerChatJid || selfJid);
 // buttons: כפתורי תשובה בווטסאפ (למשל "הזמנתי הכל"). בצ'אט באתר הם מופיעים כשורת "אפשר לענות"
 async function notifyOwner(text, { buttons } = {}) {
   if (connected && selfJid) {
@@ -90,7 +92,10 @@ async function notifyOwner(text, { buttons } = {}) {
         return null;
       }
       return await sendText(ownerChat(), text);
-    } catch {}
+    } catch (e) {
+      // לא שותקים: רושמים למה ווטסאפ סירב, וההודעה עוברת לצ'אט באתר עם התראה לטלפון
+      logger.error(e, "notifyOwner: WhatsApp send failed, falling back to web inbox");
+    }
   }
   if (buttons?.length) text += `\n\nאפשר לענות: ${buttons.join(" / ")}`;
   webInbox.push({ id: Date.now() + Math.random(), text, ts: Date.now() });
