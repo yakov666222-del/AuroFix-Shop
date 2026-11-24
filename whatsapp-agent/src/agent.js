@@ -4,7 +4,8 @@ import path from "node:path";
 import Anthropic from "@anthropic-ai/sdk";
 import { CUSTOMER_TOOLS, OWNER_TOOLS, runTool } from "./tools.js";
 import { DATA_DIR, getHistory, appendHistory, memory } from "./store.js";
-import { runGemini } from "./gemini.js";
+import { runGemini, runWebTool, WEB_CLIENT_TOOLS } from "./gemini.js";
+import { replyAppendix } from "./tools.js";
 import { checklistBlock } from "./checklist.js";
 
 // המפתחות נלקחים מ-.env או מהקבצים בתיקיית data (שנשמרים דרך עמוד ההגדרה)
@@ -26,14 +27,16 @@ export const provider = () => (claudeKey() ? "claude" : geminiKey() ? "gemini" :
 let client = null;
 function getClient() {
   const apiKey = claudeKey();
-  if (!client || client.apiKey !== apiKey) client = new Anthropic({ apiKey });
+  // ניסיון חוזר אחד וזמן המתנה של דקה: אם Claude תקוע, עוברים מהר ל-Gemini
+  if (!client || client.apiKey !== apiKey) client = new Anthropic({ apiKey, maxRetries: 1, timeout: 60_000 });
   return client;
 }
-const MODEL = process.env.CLAUDE_MODEL || "claude-opus-5-5";
+// Haiku 5.5: מהיר וזול (כ-15 ש"ח בחודש בשימוש של הבעלים). Gemini החינמי נשאר גיבוי
+const MODEL = process.env.CLAUDE_MODEL || "claude-haiku-5-5";
 const OWNER_NAME = process.env.OWNER_NAME || "יעקב";
 const BUSINESS_NAME = process.env.BUSINESS_NAME || "AuroFix";
 const TZ = process.env.TZ_NAME || "Asia/Jerusalem";
-const OWNER_EFFORT = process.env.OWNER_EFFORT || "high";
+const OWNER_EFFORT = process.env.OWNER_EFFORT || "low"; // low: תשובות מהירות. הדיוק נשמר בקוד (רשימות מהמערכת, בדיקת שינויים)
 
 const businessInfo = (() => {
   try {
@@ -234,8 +237,24 @@ function sources(content) {
 export async function runAgent(mode, key, text, images, ctx) {
   const isOwner = mode === "owner";
   if (!provider()) throw new Error("עדיין לא הוגדר מפתח. פתח את עמוד ההגדרה והדבק מפתח של Gemini או Claude.");
+  if (provider() === "gemini") return runViaGemini(isOwner, key, text, images, ctx);
+  // Claude (Haiku) הוא המוח הראשי. אם הוא נופל (עומס, תקלה, נגמר הקרדיט), עוברים ל-Gemini החינמי
+  try {
+    return await runViaClaude(isOwner, key, text, images, ctx);
+  } catch (e) {
+    console.log(`⚠️ Claude לא זמין (${e?.status ?? ""} ${String(e?.message || e).slice(0, 120)}), עובר ל-Gemini`);
+    if (!geminiKey()) throw e;
+    // אם כבר בוצע שינוי במערכת לפני הנפילה, לא מריצים שוב (כדי לא לעדכן פעמיים)
+    if (replyAppendix.some((x) => x.startsWith("🧾"))) {
+      return "⚠️ באמצע העבודה המוח הראשי נפל. מה שכבר נכנס למערכת מופיע בדוח למטה. בדוק אותו לפני שמבקש שוב.";
+    }
+    replyAppendix.length = 0;
+    return runViaGemini(isOwner, key, text, images, ctx);
+  }
+}
 
-  if (provider() === "gemini") {
+async function runViaGemini(isOwner, key, text, images, ctx) {
+  {
     const historyUser = (images.length ? `[${images.length} תמונות] ` : "") + (text || "");
     const { text: out, sources } = await runGemini({
       apiKey: geminiKey(),
@@ -252,7 +271,13 @@ export async function runAgent(mode, key, text, images, ctx) {
     const uniq = [...new Set(sources.map((s) => s.split(": ").pop()))].slice(0, 3);
     return finalText + (isOwner && uniq.length ? `\n\n🔗 מקורות:\n${uniq.join("\n")}` : "");
   }
-  const tools = isOwner ? [...WEB_TOOLS, ...OWNER_TOOLS] : CUSTOMER_TOOLS;
+}
+
+async function runViaClaude(isOwner, key, text, images, ctx) {
+  // כלי האינטרנט שלנו (Tavily + קריאת דפים), כמו ב-Gemini, במקום כלי השרת של Anthropic
+  const toAnthropic = (t) => ({ name: t.name, description: t.description, input_schema: t.input_schema, ...(t.strict ? { strict: true } : {}) });
+  const tools = (isOwner ? [...WEB_CLIENT_TOOLS, ...OWNER_TOOLS] : CUSTOMER_TOOLS).map(toAnthropic);
+  const webSources = [];
 
   // ההנחיות הקבועות נשמרות ב-cache. הזיכרון נמצא בבלוק נפרד אחריהן, כי הוא משתנה.
   const system = isOwner
@@ -268,22 +293,19 @@ export async function runAgent(mode, key, text, images, ctx) {
   ];
 
   // ההיסטוריה נשמרת כטקסט בלבד (בלי בלוקי חשיבה) ורק מתווספת, ולכן אין בעיה לקצר אותה מההתחלה.
-  const messages = [...getHistory(key), { role: "user", content: userContent }];
+  const messages = [...getHistory(key).slice(-40), { role: "user", content: userContent }];
 
   let finalText = "";
   let cited = "";
   for (let step = 0; step < 10; step++) {
-    const response = await getClient().beta.messages.create({
+    const response = await getClient().messages.create({
       model: MODEL,
-      max_tokens: 16000,
+      max_tokens: 8000,
       system,
       tools,
       messages,
       cache_control: { type: "ephemeral" },
       output_config: { effort: isOwner ? OWNER_EFFORT : "low" },
-      // אם המודל מסרב מסיבות בטיחות, הבקשה עוברת אוטומטית למודל גיבוי
-      betas: ["server-side-fallback-2026-07-01"],
-      fallbacks: "default",
     });
 
     const textOut = response.content
@@ -313,7 +335,9 @@ export async function runAgent(mode, key, text, images, ctx) {
     for (const block of response.content) {
       if (block.type !== "tool_use") continue;
       try {
-        const out = await runTool(block.name, block.input, ctx);
+        const web = isOwner ? await runWebTool(block.name, block.input, geminiKey()) : null;
+        if (web) webSources.push(...web.sources);
+        const out = web ? web.text : await runTool(block.name, block.input, ctx);
         results.push({ type: "tool_result", tool_use_id: block.id, content: out });
       } catch (err) {
         results.push({ type: "tool_result", tool_use_id: block.id, content: String(err.message || err), is_error: true });
@@ -324,5 +348,6 @@ export async function runAgent(mode, key, text, images, ctx) {
 
   const historyUser = (images.length ? `[${images.length} תמונות] ` : "") + (text || "");
   appendHistory(key, historyUser, finalText || "(ללא תשובה)", isOwner ? 120 : 40);
-  return finalText + cited;
+  const uniq = [...new Set(webSources.map((x) => x.split(": ").pop()))].filter((u) => /^https?:/.test(u)).slice(0, 3);
+  return finalText + (cited || (isOwner && uniq.length ? `\n\n🔗 מקורות:\n${uniq.join("\n")}` : ""));
 }

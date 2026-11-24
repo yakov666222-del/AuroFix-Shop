@@ -943,6 +943,14 @@ http
 <small>המפתח נשמר רק בשרת שלך. (אפשר גם מפתח של Claude שמתחיל ב-sk-ant-)</small></div>`;
       return res.end(page(body));
     }
+    // המוח הראשי: Claude Haiku (מהיר, בתשלום לפי שימוש). בלי מפתח, היא רצה על Gemini החינמי
+    {
+      const hasClaude = Boolean(process.env.ANTHROPIC_API_KEY || fs.existsSync(path.join(DATA_DIR, "anthropic_key")));
+      body += `<div class="card"><h2>🧠 מוח ראשי: Claude Haiku ${hasClaude ? "✅ מחובר" : "(לא מחובר, עובדת על Gemini החינמי)"}</h2>
+${hasClaude ? "<p>היועצת עובדת עם Claude Haiku, ו-Gemini החינמי נשאר גיבוי אוטומטי. אפשר להחליף מפתח כאן:</p>" : `<p>Claude Haiku עונה מהר ובלי מכסה יומית (כ-15 ש"ח בחודש). Gemini החינמי יישאר גיבוי.</p>
+<ol><li>פתח את <a href="https://platform.claude.com" target="_blank">platform.claude.com</a>, הירשם, הכנס כרטיס וטען קרדיט</li><li>בתפריט <b>API Keys</b> לחץ <b>Create Key</b> והעתק את המפתח (מתחיל ב-sk-ant-)</li><li>הדבק כאן:</li></ol>`}
+<form method="post" action="/apikey${self}"><input name="apikey" placeholder="sk-ant-..." autocomplete="off" required><button>שמור</button></form></div>`;
+    }
     // חיפוש באינטרנט (לסקר שוק): מפתח Tavily חינמי
     {
       const hasTavily = Boolean(process.env.TAVILY_API_KEY || fs.existsSync(path.join(DATA_DIR, "tavily_key")));

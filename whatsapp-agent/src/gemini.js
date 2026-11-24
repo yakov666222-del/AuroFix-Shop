@@ -235,6 +235,17 @@ async function readWebpage(url) {
   throw new Error("יותר מדי הפניות");
 }
 
+// חיפוש וקריאת דפים גם בשביל Claude (Haiku), כדי שלשני המוחות יהיו אותם כלים
+export const WEB_CLIENT_TOOLS = [WEB_SEARCH_TOOL, READ_PAGE_TOOL];
+export async function runWebTool(name, input, apiKey) {
+  if (name === "web_search") {
+    const r = await webSearch(apiKey, input?.query || "");
+    return { text: r.text + (r.sources.length ? `\nמקורות:\n${r.sources.join("\n")}` : ""), sources: r.sources };
+  }
+  if (name === "read_webpage") return { text: await readWebpage(input?.url || ""), sources: [`דף: ${input?.url}`] };
+  return null;
+}
+
 /** תמלול הודעה קולית בעברית. audio = { mime, data(base64) } */
 export async function transcribeAudio(apiKey, audio) {
   const res = await generate(apiKey, {
