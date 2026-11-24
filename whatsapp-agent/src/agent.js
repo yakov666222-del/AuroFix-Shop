@@ -240,7 +240,7 @@ export async function runAgent(mode, key, text, images, ctx) {
       apiKey: geminiKey(),
       system: isOwner ? `${OWNER_SYSTEM}\n\n${memoryBlock()}\n\n${checklistBlock()}` : CUSTOMER_SYSTEM,
       tools: isOwner ? OWNER_TOOLS : CUSTOMER_TOOLS,
-      history: getHistory(key),
+      history: getHistory(key).slice(-40), // רק 40 ההודעות האחרונות נשלחות למודל: מהיר יותר וחוסך מכסה. השיחה המלאה נשמרת
       text: `${nowLine()}\n${text || "(נשלחה תמונה)"}`,
       images,
       runTool: (name, input) => runTool(name, input, ctx),
