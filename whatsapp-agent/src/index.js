@@ -786,7 +786,10 @@ http
       return res.end(JSON.stringify(out));
     }
     if (req.method === "POST" && url.pathname === "/apikey") {
-      const k = (await readBody(req)).get("apikey")?.trim() || "";
+      let k = (await readBody(req)).get("apikey")?.trim().replace(/^["'<]+|["'>]+$/g, "") || "";
+      // מ-Tavily אפשר להדביק גם את "MCP link" (כתובת שהמפתח בתוכה): מוציאים ממנה את המפתח
+      const tv = k.match(/tvly-[A-Za-z0-9_\-]{10,}/);
+      if (tv) k = tv[0];
       if (k.startsWith("sk-ant-")) fs.writeFileSync(path.join(DATA_DIR, "anthropic_key"), k, { mode: 0o600 });
       // מפתח לחיפוש באינטרנט (Tavily)
       else if (/^tvly-[A-Za-z0-9_\-]{10,}$/.test(k)) fs.writeFileSync(path.join(DATA_DIR, "tavily_key"), k, { mode: 0o600 });
@@ -876,7 +879,7 @@ http
       const hasTavily = Boolean(process.env.TAVILY_API_KEY || fs.existsSync(path.join(DATA_DIR, "tavily_key")));
       body += `<div class="card"><h2>🌐 חיפוש באינטרנט ${hasTavily ? "✅ מחובר" : "(לא מחובר)"}</h2>
 ${hasTavily ? "<p>היועץ יכול לחפש באינטרנט ולעשות סקר שוק. אפשר להחליף מפתח כאן:</p>" : `<p>כדי שהיועץ יוכל לחפש באינטרנט ולעשות סקר שוק, צריך מפתח חינמי של Tavily (1,000 חיפושים בחודש, בלי כרטיס אשראי).</p>
-<ol><li>פתח את <a href="https://app.tavily.com" target="_blank">app.tavily.com</a> והירשם עם גוגל</li><li>בדף הראשי מופיע <b>API Key</b> שמתחיל ב-tvly-. לחץ על ההעתקה</li><li>הדבק כאן:</li></ol>`}
+<ol><li>פתח את <a href="https://app.tavily.com" target="_blank">app.tavily.com</a> והירשם עם גוגל</li><li>בדף הראשי, בכרטיס <b>API Keys</b> למעלה, לחץ על סמל ההעתקה ליד המפתח (מתחיל ב-tvly-). גם <b>Copy MCP link</b> עובד</li><li>הדבק כאן:</li></ol>`}
 <form method="post" action="/apikey${self}"><input name="apikey" placeholder="tvly-..." autocomplete="off" required><button>שמור</button></form></div>`;
     }
 
