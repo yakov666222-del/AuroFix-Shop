@@ -56,11 +56,19 @@ export async function findItems(query) {
   const items = await api("/api/inventory");
   const words = norm(query).split(" ").filter(Boolean);
   const stem = (w) => w.replace(/(ימ|ות)$/, "").replace(/ה$/, "");
-  return items
-    .filter((i) => {
-      const hay = norm(`${i.name} ${i.sku} ${i.cat} ${i.supplier} ${i.notes}`);
-      return words.every((w) => hay.includes(w) || hay.includes(stem(w)));
-    })
+  let hits = items.filter((i) => {
+    const hay = norm(`${i.name} ${i.sku} ${i.cat} ${i.supplier} ${i.notes}`);
+    return words.every((w) => hay.includes(w) || hay.includes(stem(w)));
+  });
+  // אם אחת המילים היא שם של קטגוריה ("מסך" -> "מסכים"), משאירים רק את הקטגוריה הזאת,
+  // כדי ש"דבק להדבקת מסכים" לא ייכנס לרשימת המסכים
+  const cats = [...new Set(items.map((i) => norm(i.cat)).filter(Boolean))];
+  const wanted = cats.filter((c) => words.some((w) => c.includes(stem(w)) && stem(w).length >= 3));
+  if (wanted.length) {
+    const inCat = hits.filter((i) => wanted.includes(norm(i.cat)));
+    if (inCat.length) hits = inCat;
+  }
+  return hits
     .sort((a, b) => String(a.cat).localeCompare(String(b.cat), "he") || String(a.name).localeCompare(String(b.name), "he", { numeric: true }));
 }
 
