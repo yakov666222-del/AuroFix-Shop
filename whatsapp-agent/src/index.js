@@ -790,6 +790,7 @@ http
       // מ-Tavily אפשר להדביק גם את "MCP link" (כתובת שהמפתח בתוכה): מוציאים ממנה את המפתח
       const tv = k.match(/tvly-[A-Za-z0-9_\-]{10,}/);
       if (tv) k = tv[0];
+      if (/YOUR|API_KEY/i.test(k)) return back("זו דוגמה מההוראות של Tavily (tvly-YOUR_API_KEY), לא המפתח שלך. העתק את המפתח מכרטיס API Keys בראש הדף");
       if (k.startsWith("sk-ant-")) fs.writeFileSync(path.join(DATA_DIR, "anthropic_key"), k, { mode: 0o600 });
       // מפתח לחיפוש באינטרנט (Tavily)
       else if (/^tvly-[A-Za-z0-9_\-]{10,}$/.test(k)) fs.writeFileSync(path.join(DATA_DIR, "tavily_key"), k, { mode: 0o600 });
