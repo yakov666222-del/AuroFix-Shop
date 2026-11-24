@@ -72,7 +72,7 @@ const LAB_TOOLS = [
   {
     name: "propose_inventory_change",
     description:
-      "מציע שינוי כמות במלאי (delta שלילי = השתמשתי/מכרתי, חיובי = הגיעה הזמנה). השינוי לא מתבצע עד שהבעלים עונה 'כן'. קודם מצא את הפריט עם search_inventory כדי לקבל id. אחרי ההצעה, שאל את הבעלים בשורה אחת אם לאשר.",
+      "משנה כמות במלאי מיד (delta שלילי = השתמשתי/מכרתי, חיובי = הגיעה הזמנה). קודם מצא את הפריט עם search_inventory כדי לקבל id. אחרי הביצוע כתוב בשורה אחת מה עשית.",
     strict: true,
     input_schema: strict({
       item_id: { type: "string" },
@@ -107,9 +107,9 @@ const LAB_TOOLS = [
   {
     name: "propose_lab_action",
     description:
-      "מציע כל פעולה במערכת המעבדה (יצירה, עדכון, מחיקה). הפעולה לא מתבצעת עד שהבעלים עונה 'כן'. פעולות: " +
+      "מבצע פעולה במערכת המעבדה. יצירה ועדכון מתבצעים מיד, בלי לשאול. רק מחיקה (delete_*, remove_repair_part) ממתינה ל'כן' של הבעלים. פעולות: " +
       Object.entries(lab.ACTIONS).map(([k, v]) => `${k}: ${v.d}`).join("; ") +
-      ". fields הוא JSON עם השדות לשינוי בלבד. קודם קרא עם lab_read כדי לקבל id ונתונים נכונים. אחרי ההצעה, כתוב לבעלים בשורה-שתיים מה בדיוק ישתנה ושאל אם לאשר.",
+      ". fields הוא JSON עם השדות לשינוי בלבד. בעדכון ומחיקה קרא קודם עם lab_read כדי לקבל id נכון. אחרי ביצוע, כתוב בשורה אחת מה נעשה.",
     strict: true,
     input_schema: strict({
       action: { type: "string", enum: Object.keys(lab.ACTIONS) },
@@ -304,8 +304,17 @@ export async function runTool(name, input, ctx) {
       } catch {
         return "fields_json לא תקין. צריך אובייקט JSON.";
       }
-      pendingChanges.push({ ts: Date.now(), kind: "action", action: input.action, id: input.id, fields, summary: input.summary });
-      return `ההצעה נשמרה וממתינה לאישור: ${input.summary}. עכשיו כתוב לבעלים מה ישתנה ושאל אם לאשר. הוא עונה "כן" או "לא".`;
+      // מחיקה לא הפיכה, אז רק היא מחכה לאישור. כל השאר מתבצע מיד
+      if (lab.NEEDS_CONFIRM(input.action)) {
+        pendingChanges.push({ ts: Date.now(), kind: "action", action: input.action, id: input.id, fields, summary: input.summary });
+        return `זו מחיקה, אז היא ממתינה לאישור: ${input.summary}. שאל את הבעלים בשורה אחת אם למחוק ("כן" / "לא").`;
+      }
+      try {
+        await lab.runAction(input.action, input.id, fields);
+      } catch (e) {
+        return `לא הצלחתי: ${e.message}. ספר לבעלים בשורה אחת.`;
+      }
+      return `בוצע: ${input.summary}. כתוב לבעלים בשורה אחת שזה בוצע, בלי לשאול שאלות המשך מיותרות.`;
     }
 
     case "find_repairs":
@@ -321,10 +330,8 @@ export async function runTool(name, input, ctx) {
       const after = item.qty + input.delta;
       if (after < 0) return `לא הגיוני: יש במלאי רק ${item.qty} יחידות של ${item.name}. שאל את הבעלים.`;
       if (Math.abs(input.delta) > 50) return "כמות חריגה מאוד. ודא עם הבעלים את המספר לפני שמציעים.";
-      const existing = pendingChanges.findIndex((c) => c.id === item.id);
-      if (existing >= 0) pendingChanges.splice(existing, 1);
-      pendingChanges.push({ ts: Date.now(), id: item.id, name: item.name, delta: input.delta, before: item.qty, after, reason: input.reason });
-      return `ההצעה נשמרה וממתינה לאישור: ${item.name} ${input.delta > 0 ? "+" : ""}${input.delta} (מ-${item.qty} ל-${after}). עכשיו שאל את הבעלים בשורה אחת אם לאשר. הוא עונה "כן" או "לא".`;
+      const r = await lab.adjustInventory(item.id, input.delta, input.reason);
+      return `בוצע: ${item.name} ${input.delta > 0 ? "+" : ""}${input.delta}, עכשיו במלאי ${r?.qty ?? after}. כתוב לבעלים בשורה אחת שזה בוצע.`;
     }
 
     case "send_whatsapp_message": {

@@ -292,6 +292,8 @@ export const ACTIONS = {
   update_shift: { m: "PUT", p: (id) => `/api/shifts/${enc(id)}`, d: "תיקון משמרת (clock_in, clock_out, notes)" },
   delete_shift: { m: "DELETE", p: (id) => `/api/shifts/${enc(id)}`, d: "מחיקת משמרת" },
 };
+// פעולות שלא הפיכות: רק הן מחכות ל"כן" של הבעלים
+export const NEEDS_CONFIRM = (a) => /^(delete_|remove_repair_part)/.test(a);
 export const NEEDS_ID = (a) => /^(update|delete|add_repair_part|remove_repair_part|adjust|receive)/.test(a);
 
 export async function runAction(action, id, fields = {}) {
