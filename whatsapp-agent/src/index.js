@@ -342,6 +342,11 @@ async function ownerReply(text, images, isVoice, { voice = false } = {}) {
     const reply = await runAgent("owner", OWNER_KEY, text, images, { sendText, notifyOwner, chatJid: selfJid || OWNER_KEY });
     // רשימות שהקוד בנה מהמערכת מצורפות כמו שהן. בהודעה קולית הן נשלחות כטקסט (אחרי "פרטים:")
     const extra = replyAppendix.splice(0).join("\n\n");
+    // רשימה עם עלויות שהיא כתבה בעצמה (בלי הכלי שבונה רשימות מהמערכת): מסמנים שהיא לא נבדקה
+    if (!extra.includes("📋") && (String(reply).match(/עלות/g) || []).length >= 3) {
+      const warn = "⚠️ הרשימה הזו נכתבה בלי בדיקה מול המערכת. לנתונים המדויקים כתוב: \"תני רשימה מהמערכת\".";
+      return extra ? `${reply}\n\n${warn}\n\n${extra}` : `${reply}\n\n${warn}`;
+    }
     if (!extra) return reply;
     appendHistory(OWNER_KEY, "[הרשימה שצורפה לתשובה הקודמת]", extra, 120);
     return voice ? `${reply}\nפרטים:\n${extra}` : `${reply}\n\n${extra}`;

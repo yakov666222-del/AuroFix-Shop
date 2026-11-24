@@ -53,17 +53,22 @@ async function generate(apiKey, params) {
   let emptyReason = null;
   const all = await models(apiKey);
   const open = all.filter((m) => (blockedUntil.get(m) || 0) < Date.now());
-  for (const model of open.length ? open : all) {
+  const list = open.length ? open : all;
+  // סבב שני: אם כל הדגמים עמוסים, מחכים רגע ומנסים שוב את הדגם הקל, עם זמן המתנה ארוך
+  const fallback = all.filter((m) => /-lite$/.test(m)).slice(0, 1);
+  const tries = [...list.map((m) => [m, 30000]), ...fallback.map((m) => [m, 90000, true])];
+  for (const [model, waitMs, isRetry] of tries) {
+    if (isRetry) await new Promise((r) => setTimeout(r, 3000));
     try {
       const think = !noThinking.has(model) && thinkingFor(model);
       const config = think && !params.config?.thinkingConfig ? { ...params.config, thinkingConfig: think } : params.config;
       let res;
       try {
-        res = await withTimeout(client(apiKey).models.generateContent({ model, ...params, config }), 30000);
+        res = await withTimeout(client(apiKey).models.generateContent({ model, ...params, config }), waitMs);
       } catch (e) {
         if ((e?.status ?? e?.code) !== 400 || !think) throw e;
         noThinking.add(model); // הדגם לא תומך בהגדרת החשיבה: מנסים שוב בלעדיה
-        res = await withTimeout(client(apiKey).models.generateContent({ model, ...params }), 30000);
+        res = await withTimeout(client(apiKey).models.generateContent({ model, ...params }), waitMs);
       }
       // תשובה ריקה (בלי טקסט ובלי קריאה לכלי): מנסים את הדגם הבא במקום להחזיר כלום
       if (!(res.text || "").trim() && !res.functionCalls?.length) {
@@ -77,7 +82,8 @@ async function generate(apiKey, params) {
       lastErr = e;
       const code = e?.status ?? e?.code;
       if (![404, 429, 500, 503, 504].includes(code)) throw e; // שגיאה אחרת: לא מנסים דגם אחר
-      blockedUntil.set(model, Date.now() + (code === 429 || code === 404 ? 30 : 3) * 60_000);
+      if (code === 429 || code === 404) blockedUntil.set(model, Date.now() + 30 * 60_000);
+      else if (!isRetry) blockedUntil.set(model, Date.now() + 2 * 60_000);
       console.log(`⚠️ Gemini ${model} לא זמין (${code}), מנסה דגם אחר`);
     }
   }
@@ -85,7 +91,7 @@ async function generate(apiKey, params) {
   if ((lastErr?.status ?? lastErr?.code) === 429) {
     throw new Error("הגעתי למכסה החינמית של Gemini להיום. נסה שוב מאוחר יותר.");
   }
-  throw new Error("Gemini עמוס כרגע. נסה שוב בעוד דקה.");
+  throw new Error("Gemini (המוח של היועצת, במסלול החינמי של גוגל) עמוס כרגע ולא ענה. שום דבר לא השתנה במערכת. נסה שוב בעוד כמה דקות.");
 }
 
 // חיפוש בגוגל כבקשה נפרדת, כך שאפשר לשלב אותו עם שאר הכלים
