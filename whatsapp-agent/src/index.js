@@ -19,7 +19,7 @@ import fs from "node:fs";
 import { OPENING, getApiKey, getGeminiKey, runAgent } from "./agent.js";
 import * as lab from "./lab.js";
 import { DATA_DIR, appendHistory, chats, clearHistory, convo, logMessage, memory, reminders, saveReminders, saveSettings, settings } from "./store.js";
-import { findChat, pendingChanges, phoneToJid, replyAppendix } from "./tools.js";
+import { auditLog, findChat, pendingChanges, phoneToJid, replyAppendix } from "./tools.js";
 import * as cloud from "./cloud.js";
 import { CHAT_HTML, MANIFEST, SW_JS } from "./chat-page.js";
 import { synthesize } from "./voice.js";
@@ -247,6 +247,7 @@ async function handleConfirmation(text) {
       if (c.kind === "action") {
         try {
           await lab.runAction(c.action, c.id, c.fields);
+          auditLog({ action: c.action, id: c.id, fields: c.fields, summary: c.summary, ok: true, confirmedByOwner: true });
           lines.push(`✅ ${c.summary}`);
         } catch (e) {
           lines.push(`⚠️ ${c.summary}: לא הצלחתי (${e.message})`);

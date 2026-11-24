@@ -322,6 +322,21 @@ export const ACTIONS = {
 export const NEEDS_CONFIRM = (a) => /^(delete_|remove_repair_part)/.test(a);
 export const NEEDS_ID = (a) => /^(update|delete|add_repair_part|remove_repair_part|adjust|receive)/.test(a);
 
+// קריאת הרשומה כפי שהיא במערכת עכשיו (לבדיקה לפני ואחרי שינוי). null אם אין דרך לקרוא אותה
+export async function readRecord(action, id) {
+  if (!id) return null;
+  try {
+    if (/inventory/.test(action)) return await api(`/api/inventory/${enc(id)}`);
+    if (/repair/.test(action)) return await api(`/api/repairs/${enc(id)}`);
+    const list = /order/.test(action) ? "/api/pending_orders" : /employee/.test(action) ? "/api/employees" : /payment/.test(action) ? "/api/payments" : /customer/.test(action) ? "/api/customers" : null;
+    if (!list) return null;
+    return (await api(list)).find((r) => String(r.id) === String(id)) || null;
+  } catch {
+    return null;
+  }
+}
+export const recordLabel = (r, id) => (r && (r.name || [r.device, r.client].filter(Boolean).join(" - ") || r.jobId)) || id || "";
+
 export async function runAction(action, id, fields = {}) {
   const A = ACTIONS[action];
   if (!A) throw new Error("פעולה לא מוכרת");

@@ -3,12 +3,59 @@
 // "לשכנע" את הסוכן לשלוח הודעות בשמך. כל שאר הכלים זמינים רק לך.
 import { chats, ledger, memory, reminders, saveLedger, saveMemory, saveReminders } from "./store.js";
 import * as lab from "./lab.js";
+import fs from "node:fs";
+import path from "node:path";
+import { DATA_DIR } from "./store.js";
 import { CHECKLIST_TOOL, updateItem } from "./checklist.js";
 
 // שינויי מלאי שממתינים לאישור הבעלים ("כן"). מבוצעים רק ב-index.js, לא על ידי המודל.
 export const pendingChanges = [];
 // רשימות שהקוד בונה מהמערכת ומצורפות לתשובה כמו שהן (כדי שהמודל לא ישכתב שמות ומספרים)
 export const replyAppendix = [];
+
+// ---------- בקרה על שינויים במערכת ----------
+// כל שינוי נבדק מול המערכת אחרי הביצוע, נרשם ביומן, והבעלים מקבל את מה שבאמת נכנס (לא מה שהמודל אומר)
+const FIELD_HE = { price: "מחיר", cost: "עלות", qty: "כמות", min: "מינימום", name: "שם", status: "סטטוס", total: "סה\"כ", labor: "עבודה", deposit: "מקדמה", notes: "הערות", supplier: "ספק", loc: "מיקום", sku: "מק\"ט", cat: "קטגוריה", qty_ordered: "כמות שהוזמנה", reorder_qty: "כמות להזמנה" };
+const same = (a, b) => (a === b) || (a != null && b != null && (String(a).trim() === String(b).trim() || (a !== "" && b !== "" && !isNaN(a) && !isNaN(b) && Number(a) === Number(b))));
+export function auditLog(entry) {
+  try { fs.appendFileSync(path.join(DATA_DIR, "audit.jsonl"), JSON.stringify({ ts: new Date().toISOString(), ...entry }) + "\n"); } catch {}
+}
+function changeReport(line) {
+  // כל השינויים של אותה תשובה מתקבצים לבלוק אחד
+  const i = replyAppendix.findIndex((x) => x.startsWith("🧾"));
+  if (i >= 0) replyAppendix[i] += `\n${line}`;
+  else replyAppendix.push(`🧾 מה נכנס למערכת (נבדק מול המערכת):\n${line}`);
+}
+async function verifiedAction(action, id, fields, summary) {
+  const before = await lab.readRecord(action, id);
+  let result;
+  try {
+    result = await lab.runAction(action, id, fields);
+  } catch (e) {
+    auditLog({ action, id, fields, summary, ok: false, error: e.message });
+    changeReport(`❌ ${summary}: לא נכנס (${e.message})`);
+    return { ok: false, error: e.message };
+  }
+  const newId = id || result?.id || result?.jobId;
+  const after = await lab.readRecord(action, newId);
+  const label = lab.recordLabel(after || before, newId);
+  const diffs = [];
+  const wrong = [];
+  if (after) {
+    for (const [k, v] of Object.entries(fields)) {
+      if (k === "delta" || typeof v === "object") continue;
+      if (!same(after[k], v)) wrong.push(`${FIELD_HE[k] || k}: ביקשתי ${v}, במערכת ${after[k] ?? "ריק"}`);
+      else if (before && !same(before[k], after[k])) diffs.push(`${FIELD_HE[k] || k} ${before[k] ?? "ריק"} ← ${after[k]}`);
+    }
+  }
+  const ok = wrong.length === 0;
+  auditLog({ action, id: newId, fields, summary, ok, verified: Boolean(after), before: before && Object.fromEntries(Object.keys(fields).map((k) => [k, before[k]])), after: after && Object.fromEntries(Object.keys(fields).map((k) => [k, after[k]])) });
+  if (!ok) changeReport(`⚠️ ${label}: ${wrong.join("; ")}`);
+  else if (diffs.length) changeReport(`✅ ${label}: ${diffs.join(", ")}`);
+  else if (!after) changeReport(`✅ ${summary} (בוצע, אין דרך לקרוא את הרשומה לבדיקה)`);
+  else changeReport(`✅ ${label}: ${/^create/.test(action) ? "נוצר" : "בלי שינוי (כבר היה ככה)"}`);
+  return { ok, wrong, verified: Boolean(after) };
+}
 
 const strict = (props, required = Object.keys(props)) => ({
   type: "object",
@@ -306,7 +353,7 @@ export async function runTool(name, input, ctx) {
         return `${n + 1}. ${i.name} | כמות: ${i.qty} | עלות: ${r(i.cost)} | מחיר עכשיו: ${r(i.price)}${sug ? ` | מוצע: ${r(sug)}` : ""}${warn}`;
       });
       // קריאה חוזרת (למשל קודם בלי מחירים ואז עם מחירים) מחליפה את הרשימה הקודמת ולא מוסיפה עוד אחת
-      replyAppendix.length = 0;
+      for (let i = replyAppendix.length - 1; i >= 0; i--) if (replyAppendix[i].startsWith("📋")) replyAppendix.splice(i, 1);
       replyAppendix.push(`📋 מהמערכת (${items.length} פריטים):\n${lines.join("\n")}`);
       const priced = Object.keys(prices).filter((id) => items.some((i) => i.id === id)).length;
       const unknown = Object.keys(prices).filter((id) => !items.some((i) => i.id === id));
@@ -340,12 +387,10 @@ export async function runTool(name, input, ctx) {
         pendingChanges.push({ ts: Date.now(), kind: "action", action: input.action, id: input.id, fields, summary: input.summary });
         return `זו מחיקה, אז היא ממתינה לאישור: ${input.summary}. שאל את הבעלים בשורה אחת אם למחוק ("כן" / "לא").`;
       }
-      try {
-        await lab.runAction(input.action, input.id, fields);
-      } catch (e) {
-        return `לא הצלחתי: ${e.message}. ספר לבעלים בשורה אחת.`;
-      }
-      return `בוצע: ${input.summary}. כתוב לבעלים בשורה אחת שזה בוצע, בלי לשאול שאלות המשך מיותרות.`;
+      const v = await verifiedAction(input.action, input.id, fields, input.summary);
+      if (v.error) return `לא הצלחתי: ${v.error}. ספר לבעלים בשורה אחת.`;
+      if (!v.ok) return `בוצע, אבל הבדיקה מול המערכת מצאה הבדל: ${v.wrong.join("; ")}. ספר לבעלים בדיוק את זה ואל תגיד שהכל תקין.`;
+      return `בוצע ונבדק מול המערכת: ${input.summary}. דוח מה נכנס בפועל מצורף אוטומטית לתשובה, אל תפרט אותו שוב. כתוב לבעלים שורה אחת לכל היותר.`;
     }
 
     case "find_repairs":
@@ -362,6 +407,10 @@ export async function runTool(name, input, ctx) {
       if (after < 0) return `לא הגיוני: יש במלאי רק ${item.qty} יחידות של ${item.name}. שאל את הבעלים.`;
       if (Math.abs(input.delta) > 50) return "כמות חריגה מאוד. ודא עם הבעלים את המספר לפני שמציעים.";
       const r = await lab.adjustInventory(item.id, input.delta, input.reason);
+      const check = await lab.getItem(item.id).catch(() => null);
+      const ok = !check || Number(check.qty) === after;
+      auditLog({ action: "adjust_inventory", id: item.id, fields: { delta: input.delta }, summary: input.reason, ok, before: { qty: item.qty }, after: { qty: check?.qty ?? r?.qty } });
+      changeReport(ok ? `✅ ${item.name}: כמות ${item.qty} ← ${check?.qty ?? r?.qty ?? after}` : `⚠️ ${item.name}: ציפיתי לכמות ${after}, במערכת ${check.qty}`);
       return `בוצע: ${item.name} ${input.delta > 0 ? "+" : ""}${input.delta}, עכשיו במלאי ${r?.qty ?? after}. כתוב לבעלים בשורה אחת שזה בוצע.`;
     }
 
