@@ -18,13 +18,14 @@ import makeWASocket, {
 import fs from "node:fs";
 import { OPENING, getApiKey, getGeminiKey, runAgent } from "./agent.js";
 import * as lab from "./lab.js";
-import { DATA_DIR, appendHistory, chats, clearHistory, convo, logMessage, memory, reminders, saveReminders, saveSettings, settings } from "./store.js";
+import { DATA_DIR, appendHistory, chats, clearHistory, convo, logMessage, memory, reminders, saveMemory, saveReminders, saveSettings, settings } from "./store.js";
 import { auditLog, findChat, hooks, pendingChanges, phoneToJid, quiz, replyAppendix, replyImages } from "./tools.js";
 import { saveOwnerMedia } from "./video.js";
 import { getVideoKey, setVideoBudget, videoBudget } from "./omni.js";
 import * as cloud from "./cloud.js";
 import { CHAT_HTML, MANIFEST, SW_JS } from "./chat-page.js";
-import { synthesize } from "./voice.js";
+import { synthesize, voiceSampleMp3 } from "./voice.js";
+import { VOICE_MENU } from "./omni.js";
 import { transcribeAudio } from "./gemini.js";
 import * as push from "./push.js";
 import { openItems } from "./checklist.js";
@@ -388,7 +389,17 @@ async function sendReplyImages() {
   if (quiz.pending && !quiz.pending.sent) await sendQuizStep();
 }
 
+// תפריט הקולות: הקולות של גוגל (אם יש מפתח בתשלום) ועוד הילה ואברי של Microsoft
+const VOICE_SAMPLE_TEXT = "המסך נסדק? ביעקב פון מחליפים לך מסך באותו יום, עם אחריות מלאה. דברו איתנו!";
+function voiceList() {
+  const list = getVideoKey() ? VOICE_MENU.map((v, i) => ({ n: i + 1, voice: `g:${v.id}`, name: v.id, label: v.label })) : [];
+  return [...list, { n: list.length + 1, voice: "female", name: "הילה", label: "אישה, Microsoft" }, { n: list.length + 2, voice: "male", name: "אברי", label: "גבר, Microsoft" }];
+}
+
 // סרטון שמוכן אחרי כמה דקות (תמונות AI): נשלח לבעלים ישירות
+// הכתובת הציבורית של היועצת (נלמדת מהבקשה האחרונה לשרת, או מהגדרה), בשביל קישורים שנשלחים לבעלים
+let publicOrigin = process.env.PUBLIC_URL || settings.publicOrigin || "";
+hooks.voicesLink = () => `${publicOrigin}/voices?key=${encodeURIComponent(process.env.QR_PAGE_KEY || "")}`;
 hooks.sendMedia = async (m) => {
   if (!cloud.cloudEnabled()) throw new Error("אין ווטסאפ רשמי");
   const to = ownerChat().split("@")[0];
@@ -863,6 +874,12 @@ http
       res.writeHead(200, { "Content-Type": "text/plain" });
       return res.end(connected ? "ok connected" : "ok");
     }
+    const fwdHost = String(req.headers["x-forwarded-host"] || req.headers.host || "");
+    if (/\.ample\.run$|\.[a-z]{2,}$/.test(fwdHost.split(":")[0]) && !/localhost|^\d/.test(fwdHost) && `https://${fwdHost}` !== publicOrigin) {
+      publicOrigin = `https://${fwdHost}`;
+      settings.publicOrigin = publicOrigin;
+      saveSettings();
+    }
     const secret = process.env.QR_PAGE_KEY;
     if (secret && url.searchParams.get("key") !== secret) {
       // דף ציבורי קטן של העסק (בשביל פרופיל הווטסאפ ומנועי חיפוש). בלי שום מידע פרטי
@@ -880,6 +897,53 @@ http
     };
 
     // ---------- צ'אט באתר ----------
+    // ---------- תפריט קולות: דף אחד, לכל קול כפתור השמעה וכפתור בחירה ----------
+    if (url.pathname === "/voices" && req.method === "GET") {
+      const chosen = memory["קול מועדף לסרטונים"] || "";
+      const rows = voiceList()
+        .map((v) => `<div class="v${chosen.includes(`"${v.voice}"`) ? " on" : ""}"><div class="t"><b>${v.n}. ${v.name}</b><small>${v.label}</small></div>
+<button class="play" onclick="play(this,'/voices/sample/${encodeURIComponent(v.voice)}.mp3${self}')">▶️</button>
+<form method="post" action="/voices/choose${self}"><input type="hidden" name="voice" value="${v.voice}"><button class="pick">${chosen.includes(`"${v.voice}"`) ? "✅ נבחר" : "בחר"}</button></form></div>`)
+        .join("");
+      res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+      return res.end(`<!doctype html><html dir="rtl" lang="he"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>תפריט קולות</title>
+<style>body{font-family:system-ui,sans-serif;max-width:520px;margin:0 auto;padding:16px;background:#f6f7f9;color:#111}h1{font-size:22px;margin:8px 0}p{color:#555;margin:4px 0 14px}
+.v{display:flex;align-items:center;gap:8px;background:#fff;border-radius:12px;padding:10px 12px;margin-bottom:8px;box-shadow:0 1px 3px #0002}.v.on{outline:2px solid #25d366}
+.t{flex:1;display:flex;flex-direction:column}.t small{color:#666}form{margin:0}button{border:0;border-radius:10px;font-size:16px;padding:10px 12px;cursor:pointer}
+.play{background:#eef2ff;font-size:20px;min-width:52px}.pick{background:#25d366;color:#fff;font-weight:bold}</style>
+<h1>🎙️ תפריט קולות לסרטונים</h1><p>לחץ ▶️ כדי לשמוע (כל הקולות אומרים את אותו משפט), ו"בחר" כדי לקבוע את הקול לסרטונים הבאים.</p>${rows}
+<script>let a;function play(b,src){if(a){a.pause()}b.textContent='⏳';a=new Audio(src);a.oncanplay=()=>{b.textContent='🔊'};a.onended=()=>{b.textContent='▶️'};a.onerror=()=>{b.textContent='⚠️'};a.play().catch(()=>{b.textContent='⚠️'})}</script></html>`);
+    }
+    if (url.pathname.startsWith("/voices/sample/") && req.method === "GET") {
+      const voice = decodeURIComponent(url.pathname.slice("/voices/sample/".length).replace(/\.mp3$/, ""));
+      if (!voiceList().some((v) => v.voice === voice)) {
+        res.writeHead(404);
+        return res.end();
+      }
+      const dir = path.join(DATA_DIR, "voice-samples");
+      const file = path.join(dir, `${voice.replace(/[^A-Za-z0-9]/g, "_")}.mp3`);
+      try {
+        if (!fs.existsSync(file)) {
+          fs.mkdirSync(dir, { recursive: true });
+          fs.writeFileSync(file, await voiceSampleMp3(VOICE_SAMPLE_TEXT, voice));
+        }
+        res.writeHead(200, { "Content-Type": "audio/mpeg", "Cache-Control": "max-age=86400" });
+        return res.end(fs.readFileSync(file));
+      } catch (e) {
+        res.writeHead(500, { "Content-Type": "text/plain; charset=utf-8" });
+        return res.end(`שגיאה: ${e.message}`);
+      }
+    }
+    if (url.pathname === "/voices/choose" && req.method === "POST") {
+      const voice = (await readBody(req)).get("voice") || "";
+      const v = voiceList().find((x) => x.voice === voice);
+      if (v) {
+        memory["קול מועדף לסרטונים"] = `${v.name} (${v.label}), voice "${v.voice}". השתמשי בו בסרטונים, אלא אם הבעלים ביקש קול אחר`;
+        saveMemory();
+      }
+      res.writeHead(303, { Location: `/voices${self}` });
+      return res.end();
+    }
     if (url.pathname === "/chat" && req.method === "GET") {
       res.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" });
       return res.end(CHAT_HTML);

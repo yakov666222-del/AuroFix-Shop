@@ -9,7 +9,6 @@ import { DATA_DIR } from "./store.js";
 import { renderAd, STYLES, SIZES } from "./creative.js";
 import { makeVideo, recentOwnerMedia, VIDEO_SIZES, MUSIC, aiMinutes } from "./video.js";
 import { generateClip, generateImage, getVideoKey, videoBudget, USD_PER_SECOND, USD_PER_IMAGE, VOICE_MENU } from "./omni.js";
-import { voiceMenuOgg } from "./voice.js";
 import { cloudEnabled } from "./cloud.js";
 import { CHECKLIST_TOOL, updateItem } from "./checklist.js";
 
@@ -534,18 +533,10 @@ export async function runTool(name, input, ctx) {
     }
 
     case "preview_voices": {
-      if (!hooks.sendMedia) return "אין חיבור לווטסאפ הרשמי.";
-      const menu = [
-        ...(getVideoKey() ? VOICE_MENU.map((v, i) => ({ n: i + 1, voice: `g:${v.id}`, name: v.id, label: v.label })) : []),
-        { n: VOICE_MENU.length + 1, voice: "female", name: "הילה", label: "אישה, Microsoft" },
-        { n: VOICE_MENU.length + 2, voice: "male", name: "אברי", label: "גבר, Microsoft" },
-      ].filter((v) => input.gender === "female" ? v.label.startsWith("אישה") : input.gender === "male" ? v.label.startsWith("גבר") : true);
-      // הודעה אחת עם הרשימה, והקלטה אחת עם כל הקולות ברצף (לא הודעה לכל קול)
-      await hooks.sendMedia({ kind: "text", caption: `🎙️ תפריט קולות (${menu.length}). בהקלטה הבאה כל קול אומר את אותו משפט, לפי המספרים:\n${menu.map((v) => `${v.n}. ${v.name}: ${v.label}`).join("\n")}` });
-      const ogg = await voiceMenuOgg(menu, input.text);
-      await hooks.sendMedia({ kind: "voice", buf: ogg, caption: "תפריט קולות" });
-      const out = menu.map((v) => `${v.n}=${v.name} (voice "${v.voice}")`);
-      return `נשלחו לבעלים הודעה אחת עם רשימת הקולות והקלטה אחת עם כולם ברצף: ${out.join(", ")}. עכשיו שאלי אותו איזה מספר. ב-make_video העבירי ב-voice את הערך שבסוגריים (למשל "g:Kore" או "female"). יש גם "native": הדמות מדברת בעצמה בסרטון, ואותו אי אפשר לשמוע מראש.`;
+      if (!hooks.sendMedia || !hooks.voicesLink) return "אין חיבור לווטסאפ הרשמי.";
+      // הודעה אחת: קישור לדף שבו כל הקולות, עם כפתור השמעה וכפתור בחירה לכל קול
+      await hooks.sendMedia({ kind: "text", caption: `🎙️ תפריט קולות: לחץ על הקישור, תשמע כל קול ב-▶️ ובחר את מה שמתאים:\n${hooks.voicesLink()}` });
+      return `נשלחה לבעלים הודעה אחת עם קישור לתפריט הקולות (${VOICE_MENU.length + 2} קולות). כשהוא לוחץ "בחר", הקול נשמר בזיכרון בנושא "קול מועדף לסרטונים" עם ערך voice מוכן. אם הוא כותב מספר במקום, המספרים: ${VOICE_MENU.map((v, i) => `${i + 1}="g:${v.id}"`).join(", ")}, ${VOICE_MENU.length + 1}="female" (הילה), ${VOICE_MENU.length + 2}="male" (אברי). יש גם "native": הדמות מדברת בעצמה בסרטון.`;
     }
 
     case "video_status": {

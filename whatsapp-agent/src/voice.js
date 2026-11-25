@@ -186,3 +186,20 @@ export async function voiceMenuOgg(items, text) {
   h.writeUInt32LE(96000, 28); h.writeUInt16LE(2, 32); h.writeUInt16LE(16, 34); h.write("data", 36); h.writeUInt32LE(data.length, 40);
   return toOggOpus(Buffer.concat([h, data]), "wav");
 }
+
+// דוגמת קול כ-MP3 (לדף תפריט הקולות: MP3 מתנגן בכל דפדפן, גם באייפון)
+export async function voiceSampleMp3(text, voice) {
+  const wav = await narrationWav(text, voice);
+  if (!wav) throw new Error("אין טקסט");
+  return new Promise((resolve, reject) => {
+    const p = spawn(ffmpegPath, ["-hide_banner", "-loglevel", "error", "-f", "wav", "-i", "pipe:0", "-c:a", "libmp3lame", "-b:a", "64k", "-f", "mp3", "pipe:1"]);
+    const out = [];
+    let err = "";
+    p.stdout.on("data", (c) => out.push(c));
+    p.stderr.on("data", (c) => (err += c));
+    p.on("error", reject);
+    p.on("close", (code) => (code === 0 ? resolve(Buffer.concat(out)) : reject(new Error(`ffmpeg: ${err.slice(0, 200)}`))));
+    p.stdin.on("error", () => {});
+    p.stdin.end(wav);
+  });
+}
