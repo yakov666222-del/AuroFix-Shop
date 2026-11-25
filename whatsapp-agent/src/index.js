@@ -19,7 +19,7 @@ import fs from "node:fs";
 import { OPENING, getApiKey, getGeminiKey, runAgent } from "./agent.js";
 import * as lab from "./lab.js";
 import { DATA_DIR, appendHistory, chats, clearHistory, convo, logMessage, memory, reminders, saveMemory, saveReminders, saveSettings, settings } from "./store.js";
-import { auditLog, findChat, hooks, pendingChanges, phoneToJid, quiz, replyAppendix, replyImages, turnTools } from "./tools.js";
+import { auditLog, findChat, getVideoJob, hooks, pendingChanges, phoneToJid, quiz, replyAppendix, replyImages, turnTools } from "./tools.js";
 import { saveOwnerMedia } from "./video.js";
 import { getVideoKey, setVideoBudget, videoBudget } from "./omni.js";
 import * as cloud from "./cloud.js";
@@ -478,6 +478,7 @@ async function handleVoiceMenu(m) {
 // סרטון שמוכן אחרי כמה דקות (תמונות AI): נשלח לבעלים ישירות
 // הכתובת הציבורית של היועצת (נלמדת מהבקשה האחרונה לשרת, או מהגדרה), בשביל קישורים שנשלחים לבעלים
 let publicOrigin = process.env.PUBLIC_URL || settings.publicOrigin || "";
+hooks.link = (p) => `${publicOrigin}${p}?key=${encodeURIComponent(process.env.QR_PAGE_KEY || "")}`;
 hooks.voicesLink = () => `${publicOrigin}/voices?key=${encodeURIComponent(process.env.QR_PAGE_KEY || "")}`;
 hooks.sendMedia = async (m) => {
   waSent++;
@@ -980,6 +981,55 @@ http
     };
 
     // ---------- צ'אט באתר ----------
+    // ---------- מעקב אחרי יצירת סרטון: מתרענן לבד כל 5 שניות ----------
+    if (url.pathname === "/video" && req.method === "GET") {
+      const j = getVideoJob();
+      const fmt = (t) => new Date(t).toLocaleTimeString("he-IL", { timeZone: "Asia/Jerusalem", hour: "2-digit", minute: "2-digit", second: "2-digit" });
+      const done = /✅/.test(j.stage || "");
+      const failed = /❌/.test(j.stage || "");
+      const elapsed = j.started ? Math.round(((done || failed ? j.at : Date.now()) - j.started) / 1000) : 0;
+      const pct = done ? 100 : failed ? 100 : j.eta ? Math.min(95, Math.round(((Date.now() - j.started) / (j.eta - j.started)) * 100)) : 0;
+      const left = !done && !failed && j.eta ? Math.max(0, Math.round((j.eta - Date.now()) / 1000)) : 0;
+      const mmss = (s) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+      const steps = (j.log || []).map((l) => `<li><span class="t">${fmt(l.t)}</span> ${l.stage}</li>`).join("");
+      const media = j.files?.final && fs.existsSync(j.files.final)
+        ? `<h2>🎬 הסרטון המוכן</h2><video src="/video/file/final${self}" controls playsinline></video>`
+        : j.files?.clip && fs.existsSync(j.files.clip)
+          ? `<h2>🎥 הווידאו הגולמי מגוגל (לפני כתוביות)</h2><video src="/video/file/clip${self}" controls playsinline muted autoplay loop></video>`
+          : "";
+      res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+      return res.end(`<!doctype html><html dir="rtl" lang="he"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">${done || failed ? "" : '<meta http-equiv="refresh" content="5">'}<title>יצירת סרטון</title>
+<style>body{font-family:system-ui,sans-serif;max-width:520px;margin:0 auto;padding:16px;background:#0e1526;color:#f3efe6}h1{font-size:22px;margin:6px 0}h2{font-size:17px;margin:18px 0 8px}.card{background:#1a2a44;border-radius:14px;padding:14px;margin:10px 0}
+.bar{height:12px;background:#0e1526;border-radius:8px;overflow:hidden}.bar i{display:block;height:100%;width:${pct}%;background:${failed ? "#ff453a" : "#e2c892"};transition:width .5s}
+.row{display:flex;justify-content:space-between;color:#c9c2b0;font-size:14px;margin-top:8px}ul{list-style:none;padding:0;margin:0}li{padding:6px 0;border-bottom:1px solid #ffffff14}.t{color:#e2c892;font-variant-numeric:tabular-nums;margin-left:8px;direction:ltr;display:inline-block}
+video{width:100%;border-radius:12px;background:#000}.script li{color:#c9c2b0}</style>
+<h1>🎬 ${j.title ? String(j.title).replace(/</g, "&lt;") : "יצירת סרטון"}</h1>
+${!j.started ? '<div class="card">אין סרטון בעבודה כרגע.</div>' : `<div class="card"><b>${j.stage}</b><div class="bar" style="margin-top:10px"><i></i></div>
+<div class="row"><span>התחיל: ${fmt(j.started)}</span><span>עבר: ${mmss(elapsed)}</span><span>${done ? "מוכן ✅" : failed ? "נכשל" : `נשאר בערך: ${mmss(left)}`}</span></div>${j.error ? `<p style="color:#ff8a80">${String(j.error).replace(/</g, "&lt;")}</p>` : ""}</div>
+<h2>⏱️ שלבים</h2><div class="card"><ul>${steps}</ul></div>
+${(j.script || []).length ? `<h2>📝 התסריט</h2><div class="card"><ul class="script">${j.script.map((x) => `<li>${String(x).replace(/</g, "&lt;")}</li>`).join("")}</ul></div>` : ""}
+${media}`}
+</html>`);
+    }
+    if (url.pathname.startsWith("/video/file/") && req.method === "GET") {
+      const which = url.pathname.endsWith("/final") ? "final" : "clip";
+      const f = getVideoJob().files?.[which];
+      if (!f || !fs.existsSync(f)) {
+        res.writeHead(404);
+        return res.end();
+      }
+      // אייפון מנגן וידאו רק עם בקשות של חלקים מהקובץ (Range)
+      const size = fs.statSync(f).size;
+      const m = /bytes=(\d*)-(\d*)/.exec(String(req.headers.range || ""));
+      if (m) {
+        const start = m[1] ? Number(m[1]) : Math.max(0, size - Number(m[2]));
+        const end = m[1] && m[2] ? Math.min(Number(m[2]), size - 1) : size - 1;
+        res.writeHead(206, { "Content-Type": "video/mp4", "Content-Range": `bytes ${start}-${end}/${size}`, "Accept-Ranges": "bytes", "Content-Length": end - start + 1 });
+        return fs.createReadStream(f, { start, end }).pipe(res);
+      }
+      res.writeHead(200, { "Content-Type": "video/mp4", "Content-Length": size, "Accept-Ranges": "bytes" });
+      return fs.createReadStream(f).pipe(res);
+    }
     // ---------- תפריט קולות: דף אחד, לכל קול כפתור השמעה וכפתור בחירה ----------
     if (url.pathname === "/voices" && req.method === "GET") {
       const chosen = memory["קול מועדף לסרטונים"] || "";

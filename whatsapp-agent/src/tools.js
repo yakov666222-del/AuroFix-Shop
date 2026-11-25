@@ -49,8 +49,18 @@ function savedLook() {
 const LOOK_PROMPT = (desc) =>
   `Photorealistic vertical portrait photo, shot on a professional camera: ${desc}. The person stands inside the phone repair lab shown in the reference image, with the gold YakovPhone logo on the dark wall behind, warm gold lighting, natural relaxed pose, looking at the camera. Real skin texture, natural and authentic, not plastic. No text except the logo on the wall.`;
 // מצב אמיתי של הסרטון שבעבודה, כדי שהיועצת תדווח מה באמת קורה ולא תנחש
-const videoJob = { stage: "", at: 0, started: 0, cost: 0, error: "" };
-const setStage = (stage, extra = {}) => Object.assign(videoJob, { stage, at: Date.now(), ...extra });
+// נשמר גם בדיסק, כדי שדף המעקב יעבוד גם אחרי הפעלה מחדש
+const JOB_FILE = path.join(DATA_DIR, "video-job.json");
+const videoJob = (() => {
+  try { return JSON.parse(fs.readFileSync(JOB_FILE, "utf8")); } catch { return { stage: "", at: 0, started: 0, cost: 0, error: "", log: [], eta: 0, files: {} }; }
+})();
+const setStage = (stage, extra = {}) => {
+  if (extra.started) Object.assign(videoJob, { log: [], files: {}, eta: 0 });
+  Object.assign(videoJob, { stage, at: Date.now(), ...extra });
+  videoJob.log = [...(videoJob.log || []), { t: Date.now(), stage }];
+  try { fs.writeFileSync(JOB_FILE, JSON.stringify(videoJob)); } catch {}
+};
+export const getVideoJob = () => videoJob;
 
 // ---------- בקרה על שינויים במערכת ----------
 // כל שינוי נבדק מול המערכת אחרי הביצוע, נרשם ביומן, והבעלים מקבל את מה שבאמת נכנס (לא מה שהמודל אומר)
@@ -646,7 +656,10 @@ export async function runTool(name, input, ctx) {
         const cost = 15 * USD_PER_SECOND;
         if (cost > b.left) return `התקציב החודשי לסרטוני AI נגמר (${b.spent} מתוך ${b.budget} דולר, ${b.videos} סרטונים). אמרי לבעלים שאפשר להגדיל אותו בעמוד ההגדרות.`;
         videoBusy = true;
-        setStage("נשלח לגוגל ליצירת הווידאו (לוקח 1-4 דקות)", { started: Date.now(), cost, error: "" });
+        const t0start = Date.now();
+        setStage("📝 התסריט מוכן, שולחת לגוגל", { started: t0start, cost, error: "", eta: t0start + 4 * 60_000, title: input.caption || input.scenes?.[0]?.headline || "סרטון", script: (input.scenes || []).map((x) => [x.headline, x.sub].filter(Boolean).join(" / ")) });
+        const fmt = (t) => new Date(t).toLocaleTimeString("he-IL", { timeZone: "Asia/Jerusalem", hour: "2-digit", minute: "2-digit" });
+        await hooks.sendMedia({ kind: "text", caption: `🎬 התחלתי ליצור את הסרטון (${fmt(t0start)}).\n⏱️ זמן משוער: כ-4 דקות, יהיה מוכן בערך ב-${fmt(t0start + 4 * 60_000)}.\n👀 לצפייה בתהליך בזמן אמת:\n${hooks.link ? hooks.link("/video") : ""}` }).catch(() => {});
         const scenes = input.scenes || [];
         const body = scenes.filter((x, i) => !(i === scenes.length - 1 && x.cta));
         const per = body.length ? 15 / body.length : 5;
@@ -668,18 +681,22 @@ export async function runTool(name, input, ctx) {
               refNote += "\nThe other reference images show the real YakovPhone repair lab: a dark modern interior, the gold YakovPhone phone-and-lightning logo on the wall, a work bench with a ring light and a microscope, warm gold lighting. Every lab shot must take place in exactly this lab, with this logo and this look.";
             }
             const prompt = `${input.video_prompt}${refNote}\nNobody says the business name out loud.\nPhotorealistic, natural real people and real places, shot on a professional cinema camera, smooth camera movement. Do not show any on-screen text, subtitles, captions or logos.`;
+            setStage("🎥 גוגל מצלם את הווידאו (1-3 דקות)");
             const clipBuf = await generateClip({ prompt, aspect: input.size === "wide" ? "16:9" : "9:16", seconds: 15, images });
             const dir = path.join(DATA_DIR, "creatives");
             fs.mkdirSync(dir, { recursive: true });
             const clipFile = path.join(dir, `omni-${Date.now()}.mp4`);
             fs.writeFileSync(clipFile, clipBuf);
-            setStage("הווידאו התקבל מגוגל. עכשיו מוסיפה כתוביות, קריינות וכרטיס סיום (כדקה)");
+            videoJob.files = { ...videoJob.files, clip: clipFile };
+            setStage("✂️ הווידאו התקבל מגוגל. מוסיפה כתוביות, קריינות וכרטיס סיום (כדקה)");
             const voice = input.voice === "native" ? "none" : input.voice;
             const { mp4, seconds } = await makeVideo({ ...input, scenes: timed, voice, background: "clip", clip: clipFile, clipAudio: true, music: input.voice === "native" ? "none" : input.music });
             if (mp4.length > 15.5 * 1024 * 1024) throw new Error("הסרטון יצא גדול מדי לווטסאפ");
-            fs.writeFileSync(path.join(dir, `video-${Date.now()}-omni-${input.size}.mp4`), mp4);
+            const finalFile = path.join(dir, `video-${Date.now()}-omni-${input.size}.mp4`);
+            fs.writeFileSync(finalFile, mp4);
+            videoJob.files = { ...videoJob.files, final: finalFile };
             const nb = videoBudget();
-            setStage("שולחת את הסרטון לווטסאפ");
+            setStage("📤 שולחת את הסרטון לווטסאפ");
             await hooks.sendMedia({ kind: "video", buf: mp4, caption: `${input.caption || "🎬 הסרטון מוכן"}\n(עלות: כ-${cost.toFixed(2)} דולר. החודש: ${nb.spent} מתוך ${nb.budget} דולר)` });
             setStage("✅ הסרטון נשלח לבעלים בווטסאפ");
             console.log(`🎬 סרטון Omni נוצר ונשלח: ${seconds} שניות, ${Math.round((Date.now() - t0) / 1000)} שניות עבודה`);
@@ -691,7 +708,7 @@ export async function runTool(name, input, ctx) {
             videoBusy = false;
           }
         })();
-        return `הבקשה נשלחה לגוגל. הסרטון עוד לא קיים ועוד לא נשלח: אמרי לבעלים "התחלתי ליצור" ולא "שלחתי". כדי לדעת מה המצב בהמשך, השתמשי ב-video_status. התחלתי ליצור סרטון AI אמיתי אצל גוגל (עלות כ-${cost.toFixed(2)} דולר, נשארו ${(b.left - cost).toFixed(2)} דולר בתקציב החודש). זה לוקח בערך 2-5 דקות, והסרטון יגיע לבעלים בווטסאפ. אמרי לו את זה במשפט אחד, ותני כבר עכשיו את הטקסט לפוסט עם 5 האשטגים.`;
+        return `הבקשה נשלחה לגוגל. הסרטון עוד לא קיים ועוד לא נשלח: אמרי לבעלים "התחלתי ליצור" ולא "שלחתי". כבר נשלחה לו הודעה עם שעת סיום משוערת וקישור לצפייה בתהליך, אז אל תשלחי קישור בעצמך. כדי לדעת מה המצב בהמשך, השתמשי ב-video_status. התחלתי ליצור סרטון AI אמיתי אצל גוגל (עלות כ-${cost.toFixed(2)} דולר, נשארו ${(b.left - cost).toFixed(2)} דולר בתקציב החודש). זה לוקח בערך 2-5 דקות, והסרטון יגיע לבעלים בווטסאפ. אמרי לו את זה במשפט אחד, ותני כבר עכשיו את הטקסט לפוסט עם 5 האשטגים.`;
       }
       if (input.background === "ai") {
         // תמונות AI בחינם לוקחות כמה דקות: הסרטון נוצר ברקע ונשלח לבעלים כשהוא מוכן
