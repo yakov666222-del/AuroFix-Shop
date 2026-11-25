@@ -28,6 +28,18 @@ const REF_DIR = path.join(path.dirname(new URL(import.meta.url).pathname), "..",
 const LAB_REFS = ["lab-logo-wall.jpg", "repair-bench-macro.jpg", "microscope-ringlight.jpg"];
 // המראות האחרונים שהוצגו לבעלים (תמונה לכל מראה), כדי שהמראה שבחר יופיע בסרטון
 let lastLooks = [];
+// הדמות הקבועה שהבעלים אישר (נשמרת בדיסק ובזיכרון)
+const LOOK_DIR = path.join(DATA_DIR, "characters");
+function savedLook() {
+  try {
+    const meta = JSON.parse(fs.readFileSync(path.join(LOOK_DIR, "current.json"), "utf8"));
+    return fs.existsSync(meta.file) ? meta : null;
+  } catch {
+    return null;
+  }
+}
+const LOOK_PROMPT = (desc) =>
+  `Photorealistic vertical portrait photo, shot on a professional camera: ${desc}. The person stands inside the phone repair lab shown in the reference image, with the gold YakovPhone logo on the dark wall behind, warm gold lighting, natural relaxed pose, looking at the camera. Real skin texture, natural and authentic, not plastic. No text except the logo on the wall.`;
 // מצב אמיתי של הסרטון שבעבודה, כדי שהיועצת תדווח מה באמת קורה ולא תנחש
 const videoJob = { stage: "", at: 0, started: 0, cost: 0, error: "" };
 const setStage = (stage, extra = {}) => Object.assign(videoJob, { stage, at: Date.now(), ...extra });
@@ -235,6 +247,24 @@ const choiceOption = strict({
 });
 const VIDEO_TOOLS = [
   {
+    name: "design_look",
+    description: "עיצוב דמות לסרטונים לפי מה שהבעלים מתאר: יוצר תמונה אחת של הדמות במעבדה של YakovPhone ושולח לו. כשהוא מבקש שינוי ('שיער כהה יותר', 'חולצה שחורה'), קראי שוב עם edit_previous=true והשינוי בלבד: אותה דמות בדיוק, רק עם השינוי. כ-0.07 דולר לתמונה. כשהוא מאשר, קראי ל-save_look.",
+    strict: true,
+    input_schema: strict({
+      prompt: { type: "string", description: "באנגלית. בפעם הראשונה: תיאור מלא של הדמות (גיל, פנים, שיער, צבע עיניים, לבוש, תכשיטים, הבעה, מראה ישראלי טבעי). בעריכה: רק מה לשנות" },
+      edit_previous: { type: "boolean", description: "true כדי לשנות את התמונה האחרונה ששלחת (אותה דמות), false לדמות חדשה" },
+    }),
+  },
+  {
+    name: "save_look",
+    description: "שומר את הדמות האחרונה ששלחת (מ-design_look או preview_looks) כדמות הקבועה לסרטונים, אחרי שהבעלים אישר אותה.",
+    strict: true,
+    input_schema: strict({
+      look_number: { type: "integer", description: "1 לדמות מ-design_look. ב-preview_looks: מספר המראה שבחר" },
+      name: { type: "string", description: "שם קצר לדמות, למשל 'הדוגמנית שלנו'" },
+    }),
+  },
+  {
     name: "preview_looks",
     description: "יוצר ושולח לבעלים בווטסאפ תמונות ממוספרות של מראות אפשריים לדמות בסרטון (במעבדה של YakovPhone), כדי שיבחר מראה לפי מספר לפני שמשלמים על סרטון. כ-0.07 דולר לתמונה. 4-6 מראות שונים.",
     strict: true,
@@ -309,7 +339,7 @@ const VIDEO_TOOLS = [
       phone: { type: "string", description: "טלפון לסצנה האחרונה, רק אם הבעלים נתן. אחרת ריק" },
       video_prompt: { type: "string", description: "רק ברקע omni: תיאור מפורט באנגלית של כל הקליפ (15 שניות) לפי זמנים, למשל '[0-5s] ... [5-10s] ... [10-15s] ...'. מי הדמות (מראה מדויק), מה קורה, מצלמה, תאורה, ומה נשמע (מוזיקה, אווירה, בלי דיבור או דיבור בעברית). התזמון תואם לסצנות (חוץ מכרטיס הסיום). אחרת ריק" },
       use_my_photos: { type: "boolean", description: "רק ברקע omni: להשתמש בתמונות האחרונות שהבעלים שלח (למשל המעבדה שלו) כרפרנס, כדי שהסרטון יראה את המקום האמיתי" },
-      look_number: { type: "integer", description: "רק ברקע omni: מספר המראה שהבעלים בחר מ-preview_looks (1-6). התמונה שלו תשמש רפרנס לדמות. 0 אם לא נבחר מראה מהתמונות" },
+      look_number: { type: "integer", description: "רק ברקע omni: מספר המראה שהבעלים בחר מ-preview_looks (1-6), או 1 לדמות מ-design_look שעוד לא נשמרה. 0 = הדמות השמורה (save_look) אם יש, אחרת בלי רפרנס" },
       use_lab_refs: { type: "boolean", description: "רק ברקע omni: להשתמש בתמונות הרפרנס של המעבדה של YakovPhone (קיר עם הלוגו בזהב, שולחן עבודה עם מנורת טבעת ומיקרוסקופ, תאורה חמה). כמעט תמיד true, חוץ מסרטון שכולו ברחוב או בבית" },
       caption: { type: "string", description: "טקסט קצר שיצורף לסרטון בווטסאפ" },
     }),
@@ -495,6 +525,44 @@ export async function runTool(name, input, ctx) {
       return `השאלון (${questions.length} שאלות) יישלח לבעלים בווטסאפ עם כפתורים מיד אחרי התשובה שלך. בתשובה עצמה כתבי רק משפט קצר, בלי לחזור על השאלות. כשהוא יסיים תקבלי את כל התשובות בהודעה אחת, ואז תמשיכי (למשל make_video).`;
     }
 
+    case "design_look": {
+      if (!getVideoKey()) return "אין מפתח של גוגל בתשלום, אז אי אפשר ליצור תמונות.";
+      if (!hooks.sendMedia) return "אין חיבור לווטסאפ הרשמי.";
+      const b = videoBudget();
+      if (USD_PER_IMAGE > b.left) return `לא נשאר תקציב לתמונות (${b.spent} מתוך ${b.budget} דולר).`;
+      const prev = input.edit_previous ? lastLooks[0] || savedLook() : null;
+      const labRef = path.join(REF_DIR, "lab-logo-wall.jpg");
+      const refs = [];
+      if (prev?.file && fs.existsSync(prev.file)) refs.push({ mime: prev.mime, data: fs.readFileSync(prev.file).toString("base64") });
+      if (fs.existsSync(labRef)) refs.push({ mime: "image/jpeg", data: fs.readFileSync(labRef).toString("base64") });
+      const fullPrompt = prev
+        ? `Edit the first reference image: keep exactly the same person (same face, identity and proportions), the same lab background and the same photo style, and change only this: ${input.prompt}. Photorealistic, natural.`
+        : LOOK_PROMPT(input.prompt);
+      const img = await generateImage(fullPrompt, { refs });
+      const dir = path.join(DATA_DIR, "creatives");
+      fs.mkdirSync(dir, { recursive: true });
+      const file = path.join(dir, `design-${Date.now()}.${img.mime.includes("png") ? "png" : "jpg"}`);
+      fs.writeFileSync(file, img.buf);
+      const desc = prev ? `${prev.prompt}; changed: ${input.prompt}` : input.prompt;
+      lastLooks = [{ title: "הדמות שעיצבת", prompt: desc, file, mime: img.mime }];
+      await hooks.sendMedia({ kind: "image", buf: img.buf, mime: img.mime, caption: prev ? "✏️ אחרי השינוי" : "👤 הדמות" });
+      const nb = videoBudget();
+      return `התמונה נשלחה לבעלים (כ-${USD_PER_IMAGE} דולר, החודש ${nb.spent} מתוך ${nb.budget}). שאלי בקצרה: לשנות משהו (שיער, פנים, לבוש, גיל, הבעה) או לשמור את הדמות? שינוי = design_look עם edit_previous=true. אישור = save_look עם look_number=1.`;
+    }
+
+    case "save_look": {
+      const l = lastLooks[(input.look_number || 1) - 1];
+      if (!l?.file || !fs.existsSync(l.file)) return "אין תמונת דמות לשמור. צרי קודם עם design_look או preview_looks.";
+      fs.mkdirSync(LOOK_DIR, { recursive: true });
+      const file = path.join(LOOK_DIR, `${Date.now()}${path.extname(l.file)}`);
+      fs.copyFileSync(l.file, file);
+      const meta = { title: input.name || l.title, prompt: l.prompt, file, mime: l.mime };
+      fs.writeFileSync(path.join(LOOK_DIR, "current.json"), JSON.stringify(meta));
+      memory["דמות לסרטונים"] = `${meta.title}: ${meta.prompt}. נשמרה תמונה, ובסרטון היא תופיע אוטומטית (look_number=0)`;
+      saveMemory();
+      return `הדמות "${meta.title}" נשמרה והיא הדמות הקבועה לסרטונים. בסרטונים הבאים אל תשאלי על דמות או מראה, אלא אם הבעלים ביקש דמות אחרת.`;
+    }
+
     case "preview_looks": {
       if (!getVideoKey()) return "אין מפתח של גוגל בתשלום, אז אי אפשר ליצור תמונות. תארי את המראות במילים בשאלון.";
       if (!hooks.sendMedia) return "אין חיבור לווטסאפ הרשמי.";
@@ -576,7 +644,7 @@ export async function runTool(name, input, ctx) {
           try {
             const images = input.use_my_photos ? recentOwnerMedia("photo", 3).map((p) => ({ mime: /\.png$/.test(p) ? "image/png" : "image/jpeg", data: fs.readFileSync(p).toString("base64") })) : [];
             let refNote = "";
-            const look = input.look_number > 0 ? lastLooks[input.look_number - 1] : null;
+            const look = input.look_number > 0 ? lastLooks[input.look_number - 1] : savedLook();
             if (look && fs.existsSync(look.file)) {
               images.unshift({ mime: look.mime, data: fs.readFileSync(look.file).toString("base64") });
               refNote += `\nThe main character must look exactly like the person in the first reference image (${look.prompt}).`;
