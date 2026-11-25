@@ -236,6 +236,14 @@ export async function makeVideo(o) {
       audio.push(`[n${i}]`);
       idx++;
     });
+    // הסאונד המקורי של הקליפ (בסרטון AI של גוגל: מוזיקה, אווירה ודיבור). עם קריינות שלנו הוא יורד ברקע
+    if (o.clipAudio && o.clip) {
+      const voiced = audio.length > 0;
+      inputs.push("-i", o.clip);
+      f.push(`[${idx}:a]atrim=0:${total.toFixed(3)},asetpts=PTS-STARTPTS,aresample=48000,volume=${voiced ? 0.4 : 1},afade=t=out:st=${Math.max(0, total - 1.2).toFixed(2)}:d=1.2[ca]`);
+      audio.push("[ca]");
+      idx++;
+    }
     const music = MUSIC.includes(o.music) ? o.music : "none";
     if (music !== "none") {
       inputs.push("-f", "lavfi", "-t", String(total), "-i", `aevalsrc='${musicExpr(music)}':s=48000`);

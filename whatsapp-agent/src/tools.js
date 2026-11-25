@@ -8,6 +8,7 @@ import path from "node:path";
 import { DATA_DIR } from "./store.js";
 import { renderAd, STYLES, SIZES } from "./creative.js";
 import { makeVideo, recentOwnerMedia, VIDEO_SIZES, MUSIC, aiMinutes } from "./video.js";
+import { generateClip, getVideoKey, videoBudget, USD_PER_SECOND } from "./omni.js";
 import { cloudEnabled } from "./cloud.js";
 import { CHECKLIST_TOOL, updateItem } from "./checklist.js";
 
@@ -245,7 +246,7 @@ const VIDEO_TOOLS = [
   {
     name: "make_video",
     description:
-      "יוצר סרטון שיווקי (MP4) ושולח אותו לבעלים בווטסאפ. כל סצנה היא מסך עם כותרת שנכנסת באנימציה, משפט, מחיר וכפתור, עם קריינות בעברית, מוזיקת רקע ומעברים. רקע: ai (סרטון קולנועי כמו של סוכנויות AI: לכל סצנה תמונה ריאליסטית שנוצרת לפי image_prompt, למשל דוגמנית עם טלפון שבור, טכנאי במעבדה, צילום מקרו של תיקון; כתוביות למטה עם שורה בזהב, וכרטיס סיום עם הלוגו של YakovPhone וכפתור), photo (קולנועי עם התמונות האחרונות שהבעלים שלח), clip (קולנועי על הסרטון האחרון שהבעלים צילם), graphic (אנימציה גרפית בלי צילומים). קריינות: female (הילה), male (אברי), none. מוזיקה: calm, energetic, none. גדלים: story (סטורי/ריל/טיקטוק/סטטוס), square (פוסט), wide (יוטיוב/פייסבוק). 3 עד 6 סצנות, כל אחת 2-5 שניות.",
+      "יוצר סרטון שיווקי (MP4) ושולח אותו לבעלים בווטסאפ. כל סצנה היא מסך עם כותרת שנכנסת באנימציה, משפט, מחיר וכפתור, עם קריינות בעברית, מוזיקת רקע ומעברים. רקע: omni (הכי איכותי: וידאו AI אמיתי של גוגל בתשלום, אנשים שזזים, מצלמה וסאונד, כ-1 דולר לסרטון של 15 שניות. נוצר לפי video_prompt, ועליו הכתוביות בעברית וכרטיס הסיום עם הלוגו), ai (סרטון קולנועי כמו של סוכנויות AI: לכל סצנה תמונה ריאליסטית שנוצרת לפי image_prompt, למשל דוגמנית עם טלפון שבור, טכנאי במעבדה, צילום מקרו של תיקון; כתוביות למטה עם שורה בזהב, וכרטיס סיום עם הלוגו של YakovPhone וכפתור), photo (קולנועי עם התמונות האחרונות שהבעלים שלח), clip (קולנועי על הסרטון האחרון שהבעלים צילם), graphic (אנימציה גרפית בלי צילומים). קריינות: female (הילה), male (אברי), none. מוזיקה: calm, energetic, none. גדלים: story (סטורי/ריל/טיקטוק/סטטוס), square (פוסט), wide (יוטיוב/פייסבוק). 3 עד 6 סצנות, כל אחת 2-5 שניות.",
     strict: true,
     input_schema: strict({
       scenes: {
@@ -264,10 +265,12 @@ const VIDEO_TOOLS = [
       },
       style: { type: "string", enum: Object.keys(STYLES) },
       size: { type: "string", enum: Object.keys(VIDEO_SIZES) },
-      voice: { type: "string", enum: ["female", "male", "none"] },
+      voice: { type: "string", enum: ["female", "male", "native", "none"], description: "native = רק הסאונד המקורי של וידאו ה-AI (ברקע omni)" },
       music: { type: "string", enum: MUSIC },
-      background: { type: "string", enum: ["ai", "photo", "clip", "graphic"] },
+      background: { type: "string", enum: ["omni", "ai", "photo", "clip", "graphic"] },
       phone: { type: "string", description: "טלפון לסצנה האחרונה, רק אם הבעלים נתן. אחרת ריק" },
+      video_prompt: { type: "string", description: "רק ברקע omni: תיאור מפורט באנגלית של כל הקליפ (15 שניות) לפי זמנים, למשל '[0-5s] ... [5-10s] ... [10-15s] ...'. מי הדמות (מראה מדויק), מה קורה, מצלמה, תאורה, ומה נשמע (מוזיקה, אווירה, בלי דיבור או דיבור בעברית). התזמון תואם לסצנות (חוץ מכרטיס הסיום). אחרת ריק" },
+      use_my_photos: { type: "boolean", description: "רק ברקע omni: להשתמש בתמונות האחרונות שהבעלים שלח (למשל המעבדה שלו) כרפרנס, כדי שהסרטון יראה את המקום האמיתי" },
       caption: { type: "string", description: "טקסט קצר שיצורף לסרטון בווטסאפ" },
     }),
   },
@@ -465,6 +468,44 @@ export async function runTool(name, input, ctx) {
         if (!clip) return "אין סרטון מהבעלים מ-48 השעות האחרונות. בקשי ממנו לצלם ולשלוח סרטון קצר (5-30 שניות), למשל הוא במעבדה מתקן מכשיר, ואז תיצרי את הסרטון. או הציעי רקע גרפי.";
       }
       const t0 = Date.now();
+      if (input.background === "omni") {
+        if (!getVideoKey()) return "אין עדיין מפתח לווידאו AI בתשלום. אמרי לבעלים שצריך להדביק את המפתח בעמוד ההגדרות, בכרטיס 🎬 וידאו AI (יש שם הוראות). בינתיים הציעי סרטון מהצילומים שלו.";
+        if (videoBusy) return "כבר נוצר סרטון ברגעים אלה. אמרי לבעלים שיחכה לו.";
+        if (!hooks.sendMedia) return "אין חיבור לווטסאפ הרשמי, אז אי אפשר לשלוח סרטון.";
+        if (!String(input.video_prompt || "").trim()) return "חסר video_prompt: תיאור הקליפ באנגלית לפי זמנים.";
+        const b = videoBudget();
+        const cost = 15 * USD_PER_SECOND;
+        if (cost > b.left) return `התקציב החודשי לסרטוני AI נגמר (${b.spent} מתוך ${b.budget} דולר, ${b.videos} סרטונים). אמרי לבעלים שאפשר להגדיל אותו בעמוד ההגדרות.`;
+        videoBusy = true;
+        const scenes = input.scenes || [];
+        const body = scenes.filter((x, i) => !(i === scenes.length - 1 && x.cta));
+        const per = body.length ? 15 / body.length : 5;
+        const timed = scenes.map((x, i) => (body.includes(x) ? { ...x, seconds: Math.max(Number(x.seconds) || 0, per) } : x));
+        (async () => {
+          try {
+            const images = input.use_my_photos ? recentOwnerMedia("photo", 3).map((p) => ({ mime: /\.png$/.test(p) ? "image/png" : "image/jpeg", data: fs.readFileSync(p).toString("base64") })) : [];
+            const prompt = `${input.video_prompt}\nPhotorealistic, natural real people and real places, shot on a professional cinema camera, smooth camera movement. Do not show any on-screen text, subtitles, captions or logos.`;
+            const clipBuf = await generateClip({ prompt, aspect: input.size === "wide" ? "16:9" : "9:16", seconds: 15, images });
+            const dir = path.join(DATA_DIR, "creatives");
+            fs.mkdirSync(dir, { recursive: true });
+            const clipFile = path.join(dir, `omni-${Date.now()}.mp4`);
+            fs.writeFileSync(clipFile, clipBuf);
+            const voice = input.voice === "native" ? "none" : input.voice;
+            const { mp4, seconds } = await makeVideo({ ...input, scenes: timed, voice, background: "clip", clip: clipFile, clipAudio: true, music: input.voice === "native" ? "none" : input.music });
+            if (mp4.length > 15.5 * 1024 * 1024) throw new Error("הסרטון יצא גדול מדי לווטסאפ");
+            fs.writeFileSync(path.join(dir, `video-${Date.now()}-omni-${input.size}.mp4`), mp4);
+            const nb = videoBudget();
+            await hooks.sendMedia({ kind: "video", buf: mp4, caption: `${input.caption || "🎬 הסרטון מוכן"}\n(עלות: כ-${cost.toFixed(2)} דולר. החודש: ${nb.spent} מתוך ${nb.budget} דולר)` });
+            console.log(`🎬 סרטון Omni נוצר ונשלח: ${seconds} שניות, ${Math.round((Date.now() - t0) / 1000)} שניות עבודה`);
+          } catch (e) {
+            console.log(`⚠️ סרטון Omni נכשל: ${e.message}`);
+            await ctx.notifyOwner?.(`⚠️ לא הצלחתי לסיים את הסרטון: ${e.message}`).catch(() => {});
+          } finally {
+            videoBusy = false;
+          }
+        })();
+        return `התחלתי ליצור סרטון AI אמיתי אצל גוגל (עלות כ-${cost.toFixed(2)} דולר, נשארו ${(b.left - cost).toFixed(2)} דולר בתקציב החודש). זה לוקח בערך 2-5 דקות, והסרטון יגיע לבעלים בווטסאפ. אמרי לו את זה במשפט אחד, ותני כבר עכשיו את הטקסט לפוסט עם 5 האשטגים.`;
+      }
       if (input.background === "ai") {
         // תמונות AI בחינם לוקחות כמה דקות: הסרטון נוצר ברקע ונשלח לבעלים כשהוא מוכן
         if (videoBusy) return "כבר נוצר סרטון ברגעים אלה. אמרי לבעלים שיחכה לו, ושאחריו אפשר להכין עוד אחד.";

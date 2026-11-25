@@ -21,6 +21,7 @@ import * as lab from "./lab.js";
 import { DATA_DIR, appendHistory, chats, clearHistory, convo, logMessage, memory, reminders, saveReminders, saveSettings, settings } from "./store.js";
 import { auditLog, findChat, hooks, pendingChanges, phoneToJid, quiz, replyAppendix, replyImages } from "./tools.js";
 import { saveOwnerMedia } from "./video.js";
+import { getVideoKey, setVideoBudget, videoBudget } from "./omni.js";
 import * as cloud from "./cloud.js";
 import { CHAT_HTML, MANIFEST, SW_JS } from "./chat-page.js";
 import { synthesize } from "./voice.js";
@@ -959,8 +960,20 @@ http
       res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
       return res.end(JSON.stringify(out));
     }
+    if (req.method === "POST" && url.pathname === "/videobudget") {
+      setVideoBudget((await readBody(req)).get("budget"));
+      return back();
+    }
     if (req.method === "POST" && url.pathname === "/apikey") {
-      let k = (await readBody(req)).get("apikey")?.trim().replace(/^["'<]+|["'>]+$/g, "") || "";
+      const form = await readBody(req);
+      let k = form.get("apikey")?.trim().replace(/^["'<]+|["'>]+$/g, "") || "";
+      // מפתח וידאו: מפתח גוגל מפרויקט נפרד שהחיוב בו פעיל (כדי שהמוח של היועצת יישאר בחינם)
+      if (form.get("kind") === "video") {
+        if (!/^[A-Za-z0-9._\-]{30,}$/.test(k)) return back("זה לא נראה כמו מפתח של גוגל. ודא שהעתקת את כולו");
+        if (k === getGeminiKey()) return back("זה אותו מפתח של המוח החינמי. צור מפתח בפרויקט חדש, כדי שהחיוב לא יחול על כל השיחות");
+        fs.writeFileSync(path.join(DATA_DIR, "video_key"), k, { mode: 0o600 });
+        return back();
+      }
       // מ-Tavily אפשר להדביק גם את "MCP link" (כתובת שהמפתח בתוכה): מוציאים ממנה את המפתח
       const tv = k.match(/tvly-[A-Za-z0-9_\-]{10,}/);
       if (tv) k = tv[0];
@@ -1064,6 +1077,17 @@ ${hasClaude ? "<p>היועצת עובדת על Gemini החינמי, ו-Claude Ha
 ${hasTavily ? "<p>היועץ יכול לחפש באינטרנט ולעשות סקר שוק. אפשר להחליף מפתח כאן:</p>" : `<p>כדי שהיועץ יוכל לחפש באינטרנט ולעשות סקר שוק, צריך מפתח חינמי של Tavily (1,000 חיפושים בחודש, בלי כרטיס אשראי).</p>
 <ol><li>פתח את <a href="https://app.tavily.com" target="_blank">app.tavily.com</a> והירשם עם גוגל</li><li>בדף הראשי, בכרטיס <b>API Keys</b> למעלה, לחץ על סמל ההעתקה ליד המפתח (מתחיל ב-tvly-). גם <b>Copy MCP link</b> עובד</li><li>הדבק כאן:</li></ol>`}
 <form method="post" action="/apikey${self}"><input name="apikey" placeholder="tvly-..." autocomplete="off" required><button>שמור</button></form></div>`;
+    }
+
+    // וידאו AI אמיתי (Gemini Omni Flash, בתשלום)
+    {
+      const hasVideo = Boolean(getVideoKey());
+      const vb = videoBudget();
+      body += `<div class="card"><h2>🎬 וידאו AI ${hasVideo ? "✅ מחובר" : "(לא מחובר)"}</h2>
+${hasVideo ? `<p>היועצת יכולה ליצור סרטוני AI אמיתיים (כ-1 דולר לסרטון של 15 שניות). החודש: <b>${vb.spent}</b> מתוך <b>${vb.budget}</b> דולר, ${vb.videos} סרטונים.</p>` : `<p>סרטונים עם אנשים אמיתיים שזזים, כמו של סוכנויות השיווק. בתשלום לגוגל: כ-0.07 דולר לשנייה (כ-1 דולר לסרטון של 15 שניות). המוח של היועצת נשאר בחינם, כי המפתח הזה מפרויקט נפרד.</p>
+<ol><li>פתח את <a href="https://aistudio.google.com/apikey" target="_blank">aistudio.google.com/apikey</a></li><li>לחץ <b>Create API key</b>, ובחלון שנפתח בחר <b>Create project</b> (פרויקט חדש, למשל בשם YakovPhone Video)</li><li>ליד המפתח החדש לחץ <b>Set up billing</b> (או Upgrade), והכנס כרטיס אשראי</li><li>העתק את המפתח החדש והדבק כאן:</li></ol>`}
+<form method="post" action="/apikey${self}"><input type="hidden" name="kind" value="video"><input name="apikey" placeholder="מפתח גוגל מהפרויקט החדש" autocomplete="off" required><button>שמור</button></form>
+<form method="post" action="/videobudget${self}" style="margin-top:8px">תקציב חודשי מקסימלי (דולר): <input name="budget" type="number" min="1" max="200" value="${vb.budget}" style="width:80px"><button>עדכן</button></form></div>`;
     }
 
     // שלב 2: חיבור לווטסאפ
