@@ -112,7 +112,16 @@ import { DATA_DIR } from "./store.js";
 const nameSay = () => {
   try { return fs.readFileSync(path.join(DATA_DIR, "name-say.txt"), "utf8").trim() || "Yakov Phone"; } catch { return "Yakov Phone"; }
 };
-const englishName = (t) => t.replace(/יעקב\s*פון|yakov\s*phone/gi, nameSay());
+// מילון הגייה: מילים שהקול קורא לא נכון בלי ניקוד (למשל "מעבדת" נשמע כמו "מְעַבֶּדֶת" מלשון לעבד).
+// אפשר להוסיף מילים בקובץ pronounce.json בתיקיית הנתונים: { "מילה": "מִלָּה" }
+const PRONOUNCE = { "מעבדת": "מַעְבֶּדֶת", "מעבדה": "מַעְבָּדָה", "מעבדות": "מַעְבָּדוֹת", "במעבדה": "בַּמַּעְבָּדָה", "למעבדה": "לַמַּעְבָּדָה", "המעבדה": "הַמַּעְבָּדָה" };
+const pronounce = (t) => {
+  let extra = {};
+  try { extra = JSON.parse(fs.readFileSync(path.join(DATA_DIR, "pronounce.json"), "utf8")); } catch {}
+  const dict = { ...PRONOUNCE, ...extra };
+  return t.replace(/[\u0590-\u05FF]+/g, (w) => dict[w] || w);
+};
+const englishName = (t) => pronounce(t.replace(/יעקב\s*פון|yakov\s*phone/gi, nameSay()));
 
 export async function narrationWav(text, voice = "female") {
   let clean = speakable(text);
