@@ -8,7 +8,8 @@ import path from "node:path";
 import { DATA_DIR } from "./store.js";
 import { renderAd, STYLES, SIZES } from "./creative.js";
 import { makeVideo, recentOwnerMedia, VIDEO_SIZES, MUSIC, aiMinutes } from "./video.js";
-import { generateClip, getVideoKey, videoBudget, USD_PER_SECOND } from "./omni.js";
+import { generateClip, generateImage, getVideoKey, videoBudget, USD_PER_SECOND, USD_PER_IMAGE } from "./omni.js";
+import { voiceSample } from "./voice.js";
 import { cloudEnabled } from "./cloud.js";
 import { CHECKLIST_TOOL, updateItem } from "./checklist.js";
 
@@ -26,6 +27,8 @@ let videoBusy = false;
 // תמונות רפרנס של המעבדה (מהסרטון של PowerAds שהבעלים שלח), בלי אנשים, כדי שהסרטונים יראו את המקום והלוגו
 const REF_DIR = path.join(path.dirname(new URL(import.meta.url).pathname), "..", "assets", "brand-refs");
 const LAB_REFS = ["lab-logo-wall.jpg", "repair-bench-macro.jpg", "microscope-ringlight.jpg"];
+// המראות האחרונים שהוצגו לבעלים (תמונה לכל מראה), כדי שהמראה שבחר יופיע בסרטון
+let lastLooks = [];
 // מצב אמיתי של הסרטון שבעבודה, כדי שהיועצת תדווח מה באמת קורה ולא תנחש
 const videoJob = { stage: "", at: 0, started: 0, cost: 0, error: "" };
 const setStage = (stage, extra = {}) => Object.assign(videoJob, { stage, at: Date.now(), ...extra });
@@ -233,6 +236,27 @@ const choiceOption = strict({
 });
 const VIDEO_TOOLS = [
   {
+    name: "preview_looks",
+    description: "יוצר ושולח לבעלים בווטסאפ תמונות ממוספרות של מראות אפשריים לדמות בסרטון (במעבדה של YakovPhone), כדי שיבחר מראה לפי מספר לפני שמשלמים על סרטון. כ-0.07 דולר לתמונה. 4-6 מראות שונים.",
+    strict: true,
+    input_schema: strict({
+      looks: {
+        type: "array",
+        description: "4-6 מראות שונים זה מזה",
+        items: strict({
+          title: { type: "string", description: "תיאור קצר בעברית, למשל 'צעירה, שיער בהיר ארוך'" },
+          prompt: { type: "string", description: "תיאור מפורט באנגלית של האדם: גיל, שיער, פנים, לבוש, מראה ישראלי ים תיכוני טבעי" },
+        }),
+      },
+    }),
+  },
+  {
+    name: "preview_voices",
+    description: "שולח לבעלים בווטסאפ הודעה קולית לדוגמה מכל קריין (הילה, אישה; אברי, גבר) עם משפט שאת כותבת, כדי שישמע לפני שבוחר קול. בחינם.",
+    strict: true,
+    input_schema: strict({ text: { type: "string", description: "משפט הדגמה קצר בעברית, מתוך התסריט. שם העסק: יעקב פון" } }),
+  },
+  {
     name: "video_status",
     description: "בודק באיזה שלב באמת נמצא הסרטון שבעבודה (אצל גוגל, בעריכה, נשלח, נכשל). חובה להשתמש בזה לפני שעונים לבעלים על שאלה כמו 'מה עם הסרטון' או 'לא קיבלתי'. אסור לכתוב שסרטון נשלח בלי שהכלי הזה אמר שהוא נשלח.",
     strict: true,
@@ -283,6 +307,7 @@ const VIDEO_TOOLS = [
       phone: { type: "string", description: "טלפון לסצנה האחרונה, רק אם הבעלים נתן. אחרת ריק" },
       video_prompt: { type: "string", description: "רק ברקע omni: תיאור מפורט באנגלית של כל הקליפ (15 שניות) לפי זמנים, למשל '[0-5s] ... [5-10s] ... [10-15s] ...'. מי הדמות (מראה מדויק), מה קורה, מצלמה, תאורה, ומה נשמע (מוזיקה, אווירה, בלי דיבור או דיבור בעברית). התזמון תואם לסצנות (חוץ מכרטיס הסיום). אחרת ריק" },
       use_my_photos: { type: "boolean", description: "רק ברקע omni: להשתמש בתמונות האחרונות שהבעלים שלח (למשל המעבדה שלו) כרפרנס, כדי שהסרטון יראה את המקום האמיתי" },
+      look_number: { type: "integer", description: "רק ברקע omni: מספר המראה שהבעלים בחר מ-preview_looks (1-6). התמונה שלו תשמש רפרנס לדמות. 0 אם לא נבחר מראה מהתמונות" },
       use_lab_refs: { type: "boolean", description: "רק ברקע omni: להשתמש בתמונות הרפרנס של המעבדה של YakovPhone (קיר עם הלוגו בזהב, שולחן עבודה עם מנורת טבעת ומיקרוסקופ, תאורה חמה). כמעט תמיד true, חוץ מסרטון שכולו ברחוב או בבית" },
       caption: { type: "string", description: "טקסט קצר שיצורף לסרטון בווטסאפ" },
     }),
@@ -468,6 +493,58 @@ export async function runTool(name, input, ctx) {
       return `השאלון (${questions.length} שאלות) יישלח לבעלים בווטסאפ עם כפתורים מיד אחרי התשובה שלך. בתשובה עצמה כתבי רק משפט קצר, בלי לחזור על השאלות. כשהוא יסיים תקבלי את כל התשובות בהודעה אחת, ואז תמשיכי (למשל make_video).`;
     }
 
+    case "preview_looks": {
+      if (!getVideoKey()) return "אין מפתח של גוגל בתשלום, אז אי אפשר ליצור תמונות. תארי את המראות במילים בשאלון.";
+      if (!hooks.sendMedia) return "אין חיבור לווטסאפ הרשמי.";
+      const looks = (input.looks || []).slice(0, 6);
+      if (looks.length < 2) return "צריך לפחות 2 מראות.";
+      const b = videoBudget();
+      if (looks.length * USD_PER_IMAGE > b.left) return `לא נשאר מספיק תקציב לתמונות (${b.spent} מתוך ${b.budget} דולר).`;
+      const refPath = path.join(REF_DIR, "lab-logo-wall.jpg");
+      const refs = fs.existsSync(refPath) ? [{ mime: "image/jpeg", data: fs.readFileSync(refPath).toString("base64") }] : [];
+      const dir = path.join(DATA_DIR, "creatives");
+      fs.mkdirSync(dir, { recursive: true });
+      const results = await Promise.all(
+        looks.map(async (l, i) => {
+          try {
+            const img = await generateImage(
+              `Photorealistic vertical portrait photo, shot on a professional camera: ${l.prompt}. The person stands inside the phone repair lab shown in the reference image, with the gold YakovPhone logo on the dark wall behind, warm gold lighting, natural relaxed pose, slight smile, looking at the camera. Real skin texture, natural and authentic, not plastic. No text except the logo on the wall.`,
+              { refs }
+            );
+            const file = path.join(dir, `look-${Date.now()}-${i + 1}.${img.mime.includes("png") ? "png" : "jpg"}`);
+            fs.writeFileSync(file, img.buf);
+            return { ...l, file, mime: img.mime, buf: img.buf };
+          } catch (e) {
+            return { ...l, error: e.message };
+          }
+        })
+      );
+      lastLooks = results.map((r) => ({ title: r.title, prompt: r.prompt, file: r.file || "", mime: r.mime || "" }));
+      let sent = 0;
+      for (const [i, r] of results.entries()) {
+        if (!r.buf) continue;
+        await hooks.sendMedia({ kind: "image", buf: r.buf, mime: r.mime, caption: `${i + 1}. ${r.title}` }).then(() => sent++).catch(() => {});
+      }
+      const failed = results.filter((r) => r.error);
+      const nb = videoBudget();
+      return `נשלחו לבעלים ${sent} תמונות ממוספרות${failed.length ? ` (${failed.length} לא נוצרו: ${failed[0].error})` : ""}. עלות: כ-${(results.length * USD_PER_IMAGE).toFixed(2)} דולר, החודש ${nb.spent} מתוך ${nb.budget}. המראות: ${results.map((r, i) => `${i + 1}=${r.title}`).join(", ")}. עכשיו שאלי אותו איזה מספר (ask_choices עם האפשרויות "1. ..." עד "${results.length}. ..."), ובסרטון העבירי look_number.`;
+    }
+
+    case "preview_voices": {
+      if (!hooks.sendMedia) return "אין חיבור לווטסאפ הרשמי.";
+      const out = [];
+      for (const [v, name] of [["female", "הילה"], ["male", "אברי"]]) {
+        try {
+          const ogg = await voiceSample(input.text, v);
+          await hooks.sendMedia({ kind: "voice", buf: ogg, caption: `דוגמת קול: ${name}` });
+          out.push(name);
+        } catch (e) {
+          out.push(`${name} נכשל (${e.message})`);
+        }
+      }
+      return `נשלחו לבעלים הודעות קוליות לדוגמה, לפי הסדר: ${out.join(", ")}. כתבי לו שהראשונה היא הילה והשנייה אברי. יש גם אפשרות "הדמות מדברת (AI)": את הקול הזה אי אפשר לשמוע מראש, כי הוא נוצר רק עם הסרטון.`;
+    }
+
     case "video_status": {
       if (!videoJob.stage) return "אין סרטון בעבודה כרגע, ולא נוצר סרטון מאז ההפעלה האחרונה של היועצת.";
       const ago = (t) => `לפני ${Math.max(0, Math.round((Date.now() - t) / 60000))} דקות`;
@@ -505,12 +582,17 @@ export async function runTool(name, input, ctx) {
           try {
             const images = input.use_my_photos ? recentOwnerMedia("photo", 3).map((p) => ({ mime: /\.png$/.test(p) ? "image/png" : "image/jpeg", data: fs.readFileSync(p).toString("base64") })) : [];
             let refNote = "";
+            const look = input.look_number > 0 ? lastLooks[input.look_number - 1] : null;
+            if (look && fs.existsSync(look.file)) {
+              images.unshift({ mime: look.mime, data: fs.readFileSync(look.file).toString("base64") });
+              refNote += `\nThe main character must look exactly like the person in the first reference image (${look.prompt}).`;
+            }
             if (input.use_lab_refs !== false) {
               for (const f of LAB_REFS) {
                 const p = path.join(REF_DIR, f);
                 if (images.length < 6 && fs.existsSync(p)) images.push({ mime: "image/jpeg", data: fs.readFileSync(p).toString("base64") });
               }
-              refNote = "\nThe reference images show the real YakovPhone repair lab: a dark modern interior, the gold YakovPhone phone-and-lightning logo on the wall, a work bench with a ring light and a microscope, warm gold lighting. Every lab shot must take place in exactly this lab, with this logo and this look.";
+              refNote += "\nThe other reference images show the real YakovPhone repair lab: a dark modern interior, the gold YakovPhone phone-and-lightning logo on the wall, a work bench with a ring light and a microscope, warm gold lighting. Every lab shot must take place in exactly this lab, with this logo and this look.";
             }
             const prompt = `${input.video_prompt}${refNote}\nNobody says the business name out loud.\nPhotorealistic, natural real people and real places, shot on a professional cinema camera, smooth camera movement. Do not show any on-screen text, subtitles, captions or logos.`;
             const clipBuf = await generateClip({ prompt, aspect: input.size === "wide" ? "16:9" : "9:16", seconds: 15, images });

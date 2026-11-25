@@ -128,6 +128,12 @@ function toOggOpus(input, ext) {
   });
 }
 
+/** דוגמת קול לבחירה: OGG בקול מסוים (female/male) */
+export async function voiceSample(text, voice = "female") {
+  const a = await edgeTTS(speakable(text), VOICES[voice] || VOICES.female);
+  return toOggOpus(a.buf, a.ext);
+}
+
 /** מחזיר הודעה קולית (Buffer של OGG/Opus) מטקסט בעברית */
 export async function synthesize(text) {
   const clean = speakable(text);

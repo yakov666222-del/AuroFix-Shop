@@ -32,6 +32,13 @@ export function setVideoBudget(usd) {
   u.budget = Math.max(1, Math.min(200, Number(usd) || 10));
   fs.writeFileSync(USAGE_FILE, JSON.stringify(u));
 }
+export function chargeUsage(usd) {
+  const u = usage();
+  const b = videoBudget().budget;
+  u.usd += usd;
+  u.budget = b;
+  fs.writeFileSync(USAGE_FILE, JSON.stringify(u));
+}
 function addUsage(usd) {
   const u = usage();
   const b = videoBudget().budget;
@@ -112,4 +119,25 @@ export async function generateClip(o) {
     await new Promise((r) => setTimeout(r, 5000));
   }
   return api(`files/${id}:download?alt=media`, { raw: true, timeout: 5 * 60_000 });
+}
+
+// ---------- תמונות (Nano Banana 2 של גוגל): תצוגה מקדימה של מראה הדמות, לפני שמשלמים על סרטון ----------
+export const IMAGE_MODEL = process.env.IMAGE_MODEL || "gemini-3.1-flash-image";
+export const USD_PER_IMAGE = 0.067; // 1K, לפי דף המחירים של גוגל (נובמבר 2026)
+
+/** יוצר תמונה אחת. refs: תמונות רפרנס (base64). מחזיר { buf, mime } */
+export async function generateImage(prompt, { refs = [], aspect = "9:16" } = {}) {
+  if (!getVideoKey()) throw new Error("אין מפתח של גוגל בתשלום");
+  const b = videoBudget();
+  if (USD_PER_IMAGE > b.left) throw new Error(`התקציב החודשי נגמר (${b.spent} מתוך ${b.budget} דולר)`);
+  const parts = [...refs.map((r) => ({ inlineData: { mimeType: r.mime, data: r.data } })), { text: prompt }];
+  const res = await api(`models/${IMAGE_MODEL}:generateContent`, {
+    method: "POST",
+    timeout: 120_000,
+    body: { contents: [{ role: "user", parts }], generationConfig: { responseModalities: ["IMAGE"], imageConfig: { aspectRatio: aspect, imageSize: "1K" } } },
+  });
+  chargeUsage(USD_PER_IMAGE);
+  const img = (res.candidates?.[0]?.content?.parts || []).find((p) => p.inlineData?.data);
+  if (!img) throw new Error(`גוגל לא החזיר תמונה (${res.candidates?.[0]?.finishReason || res.promptFeedback?.blockReason || "לא ידוע"})`);
+  return { buf: Buffer.from(img.inlineData.data, "base64"), mime: img.inlineData.mimeType || "image/png" };
 }

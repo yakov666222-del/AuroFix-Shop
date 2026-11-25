@@ -162,11 +162,11 @@ export async function downloadAudio(mediaId, directUrl) {
 
 // שליחת הודעה קולית: מעלים את הקובץ לווטסאפ ושולחים לפי המזהה שלו
 // שליחת תמונה (למשל מודעה שהיועצת עיצבה): מעלים לווטסאפ ושולחים לפי המזהה
-export async function cloudSendImage(toPhone, pngBuf, caption = "") {
+export async function cloudSendImage(toPhone, pngBuf, caption = "", mime = "image/png") {
   const form = new FormData();
   form.append("messaging_product", "whatsapp");
-  form.append("type", "image/png");
-  form.append("file", new Blob([pngBuf], { type: "image/png" }), "ad.png");
+  form.append("type", mime);
+  form.append("file", new Blob([pngBuf], { type: mime }), mime === "image/png" ? "ad.png" : "image.jpg");
   const up = await fetch(`${base()}/${cfg.phoneNumberId}/media`, { method: "POST", headers: authHeaders(), body: form, signal: AbortSignal.timeout(30000) });
   const upData = await up.json().catch(() => ({}));
   if (!up.ok || !upData.id) throw new Error(upData?.error?.message || `העלאת התמונה נכשלה (${up.status})`);

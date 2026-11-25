@@ -393,8 +393,9 @@ hooks.sendMedia = async (m) => {
   if (!cloud.cloudEnabled()) throw new Error("אין ווטסאפ רשמי");
   const to = ownerChat().split("@")[0];
   if (m.kind === "video") await cloud.cloudSendVideo(to, m.buf, m.caption);
-  else await cloud.cloudSendImage(to, m.png, m.caption);
-  logMessage(ownerChat(), "bot", `🎬 ${m.caption}`);
+  else if (m.kind === "voice") await cloud.cloudSendVoice(to, m.buf);
+  else await cloud.cloudSendImage(to, m.png || m.buf, m.caption, m.mime || "image/png");
+  logMessage(ownerChat(), "bot", `${m.kind === "voice" ? "🔊" : m.kind === "video" ? "🎬" : "🖼️"} ${m.caption || ""}`);
 };
 
 // ---------- שאלון בחירה: שאלה אחרי שאלה עם כפתורים, בלי לחכות למוח בין שאלה לשאלה ----------
