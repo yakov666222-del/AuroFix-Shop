@@ -311,7 +311,14 @@ async function runViaGemini(isOwner, key, text, images, ctx) {
 
 async function runViaClaude(isOwner, key, text, images, ctx) {
   // כלי האינטרנט שלנו (Tavily + קריאת דפים), כמו ב-Gemini, במקום כלי השרת של Anthropic
-  const toAnthropic = (t) => ({ name: t.name, description: t.description, input_schema: t.input_schema, ...(t.strict ? { strict: true } : {}) });
+  // Claude מרשה עד 20 כלים "strict". הכלים של המערכת (מלאי, תיקונים) קודמים, כי שם הדיוק הכי חשוב
+  const LOOSE = new Set(["make_ad_image", "ask_choices", "make_video", "video_status", "remember", "forget", "list_recent_chats", "read_chat"]);
+  let strictCount = 0;
+  const toAnthropic = (t) => {
+    const useStrict = t.strict && !LOOSE.has(t.name) && strictCount < 20;
+    if (useStrict) strictCount++;
+    return { name: t.name, description: t.description, input_schema: t.input_schema, ...(useStrict ? { strict: true } : {}) };
+  };
   const tools = (isOwner ? [...WEB_CLIENT_TOOLS, ...OWNER_TOOLS] : CUSTOMER_TOOLS).map(toAnthropic);
   const webSources = [];
 
