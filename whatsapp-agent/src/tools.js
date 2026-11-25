@@ -27,7 +27,15 @@ let videoBusy = false;
 const REF_DIR = path.join(path.dirname(new URL(import.meta.url).pathname), "..", "assets", "brand-refs");
 const LAB_REFS = ["lab-logo-wall.jpg", "repair-bench-macro.jpg", "microscope-ringlight.jpg"];
 // המראות האחרונים שהוצגו לבעלים (תמונה לכל מראה), כדי שהמראה שבחר יופיע בסרטון
-let lastLooks = [];
+// נשמר גם בדיסק, כדי שהפעלה מחדש לא תמחק את התמונות האחרונות
+const LAST_LOOKS_FILE = path.join(DATA_DIR, "last-looks.json");
+let lastLooks = (() => {
+  try { return JSON.parse(fs.readFileSync(LAST_LOOKS_FILE, "utf8")); } catch { return []; }
+})();
+const setLastLooks = (v) => {
+  lastLooks = v;
+  try { fs.writeFileSync(LAST_LOOKS_FILE, JSON.stringify(v)); } catch {}
+};
 // הדמות הקבועה שהבעלים אישר (נשמרת בדיסק ובזיכרון)
 const LOOK_DIR = path.join(DATA_DIR, "characters");
 function savedLook() {
@@ -442,7 +450,10 @@ const fmt = (ts) =>
 
 // ---------- הרצת כלי ----------
 // ctx = { sendText(jid, text), notifyOwner(text), chatJid, chatName }
+// אילו כלים הופעלו בפועל בתשובה הנוכחית (כדי לתפוס "כתבתי שעשיתי" בלי שנעשה)
+export const turnTools = [];
 export async function runTool(name, input, ctx) {
+  turnTools.push(name);
   switch (name) {
     case "notify_owner": {
       const who = ctx.chatName || ctx.chatJid.split("@")[0];
@@ -544,7 +555,7 @@ export async function runTool(name, input, ctx) {
       const file = path.join(dir, `design-${Date.now()}.${img.mime.includes("png") ? "png" : "jpg"}`);
       fs.writeFileSync(file, img.buf);
       const desc = prev ? `${prev.prompt}; changed: ${input.prompt}` : input.prompt;
-      lastLooks = [{ title: "הדמות שעיצבת", prompt: desc, file, mime: img.mime }];
+      setLastLooks([{ title: "הדמות שעיצבת", prompt: desc, file, mime: img.mime }]);
       await hooks.sendMedia({ kind: "image", buf: img.buf, mime: img.mime, caption: prev ? "✏️ אחרי השינוי" : "👤 הדמות" });
       const nb = videoBudget();
       return `התמונה נשלחה לבעלים (כ-${USD_PER_IMAGE} דולר, החודש ${nb.spent} מתוך ${nb.budget}). שאלי בקצרה: לשנות משהו (שיער, פנים, לבוש, גיל, הבעה) או לשמור את הדמות? שינוי = design_look עם edit_previous=true. אישור = save_look עם look_number=1.`;
@@ -589,7 +600,7 @@ export async function runTool(name, input, ctx) {
           }
         })
       );
-      lastLooks = results.map((r) => ({ title: r.title, prompt: r.prompt, file: r.file || "", mime: r.mime || "" }));
+      setLastLooks(results.map((r) => ({ title: r.title, prompt: r.prompt, file: r.file || "", mime: r.mime || "" })));
       let sent = 0;
       for (const [i, r] of results.entries()) {
         if (!r.buf) continue;

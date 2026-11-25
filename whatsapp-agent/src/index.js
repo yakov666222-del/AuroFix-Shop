@@ -19,7 +19,7 @@ import fs from "node:fs";
 import { OPENING, getApiKey, getGeminiKey, runAgent } from "./agent.js";
 import * as lab from "./lab.js";
 import { DATA_DIR, appendHistory, chats, clearHistory, convo, logMessage, memory, reminders, saveMemory, saveReminders, saveSettings, settings } from "./store.js";
-import { auditLog, findChat, hooks, pendingChanges, phoneToJid, quiz, replyAppendix, replyImages } from "./tools.js";
+import { auditLog, findChat, hooks, pendingChanges, phoneToJid, quiz, replyAppendix, replyImages, turnTools } from "./tools.js";
 import { saveOwnerMedia } from "./video.js";
 import { getVideoKey, setVideoBudget, videoBudget } from "./omni.js";
 import * as cloud from "./cloud.js";
@@ -350,11 +350,26 @@ async function ownerReply(text, images, isVoice, { voice = false } = {}) {
   if (quick) return quick;
   try {
     replyAppendix.length = 0;
-    const reply = await runAgent("owner", OWNER_KEY, text, images, { sendText, notifyOwner, chatJid: selfJid || OWNER_KEY });
+    turnTools.length = 0;
+    const ctx = { sendText, notifyOwner, chatJid: selfJid || OWNER_KEY };
+    let reply = await runAgent("owner", OWNER_KEY, text, images, ctx);
+    // היא כתבה קריאה לכלי כטקסט ("save_look(...)") במקום להפעיל אותו: מבקשים ממנה פעם אחת לבצע באמת
+    const TOOL_RE = /\b(save_look|design_look|preview_looks|preview_voices|make_video|ask_choices|video_status|make_ad_image|propose_lab_action|propose_inventory_change|show_inventory_list|remember)\s*\(/;
+    if (TOOL_RE.test(String(reply))) {
+      console.log("⚠️ קריאה לכלי נכתבה כטקסט, מבקשים לבצע באמת");
+      reply = await runAgent("owner", OWNER_KEY, `(מערכת: בתשובה הקודמת כתבת קריאה לכלי כטקסט (${String(reply).match(TOOL_RE)[1]}) ולא הפעלת אותו, אז שום דבר לא קרה. הפעילי את הכלי עכשיו באמת, ואל תכתבי שמות של כלים או סוגריים בתשובה.)`, [], ctx);
+    }
+    // היא כתבה ששלחה תמונה/סרטון/תפריט/שאלון, אבל שום כלי ששולח לא הופעל בתשובה הזו
+    const SENDERS = ["design_look", "preview_looks", "preview_voices", "make_video", "ask_choices", "make_ad_image", "send_whatsapp_message"];
+    if (/שלחתי|שולחת לך|שלחתי לך|נשלח לך/.test(String(reply)) && /תמונ|סרטון|תפריט|שאלון|קולות|מראות|הקלט/.test(String(reply)) && !turnTools.some((t) => SENDERS.includes(t)) && !replyImages.length) {
+      auditLog({ action: "claim_send_without_tool", summary: String(reply).slice(0, 200), ok: false });
+      reply += "\n\n⚠️ בדיקת מערכת: בתשובה הזו לא נשלח שום קובץ בפועל. אם חסר לך משהו, כתוב שוב מה לשלוח.";
+    }
     // רשימות שהקוד בנה מהמערכת מצורפות כמו שהן. בהודעה קולית הן נשלחות כטקסט (אחרי "פרטים:")
     let extra = replyAppendix.splice(0).join("\n\n");
     // היא כותבת "בוצע/עדכנתי" אבל שום שינוי לא נעשה בפועל בתור הזה: אומרים לבעלים את האמת
-    if (/בוצע|עודכנ|עדכנתי|עידכנתי|הכנסתי למערכת|שיניתי במערכת|רשמתי במערכת/.test(String(reply)) && !extra.includes("🧾")) {
+    // רק כשמדובר במערכת המעבדה (לא כששמרה דמות, קול או זיכרון)
+    if (/בוצע|עודכנ|עדכנתי|עידכנתי|הכנסתי למערכת|שיניתי במערכת|רשמתי במערכת/.test(String(reply)) && !extra.includes("🧾") && !turnTools.some((t) => ["save_look", "remember", "design_look", "make_video"].includes(t)) && /מלאי|תיקון|לקוח|מחיר|תשלום|מערכת/.test(String(reply))) {
       const warn = "⚠️ בדיקת מערכת: בתשובה הזו לא נעשה שום שינוי בפועל במערכת המעבדה. אם ביקשת עדכון, כתוב שוב מה לעדכן.";
       auditLog({ action: "claim_without_change", summary: String(reply).slice(0, 200), ok: false });
       extra = extra ? `${warn}\n\n${extra}` : warn;
