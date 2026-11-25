@@ -8,7 +8,7 @@ import path from "node:path";
 import { DATA_DIR } from "./store.js";
 import { renderAd, STYLES, SIZES } from "./creative.js";
 import { makeVideo, recentOwnerMedia, VIDEO_SIZES, MUSIC, aiMinutes } from "./video.js";
-import { generateClip, generateImage, getVideoKey, videoBudget, USD_PER_SECOND, USD_PER_IMAGE } from "./omni.js";
+import { generateClip, generateImage, getVideoKey, videoBudget, USD_PER_SECOND, USD_PER_IMAGE, VOICE_MENU } from "./omni.js";
 import { voiceSample } from "./voice.js";
 import { cloudEnabled } from "./cloud.js";
 import { CHECKLIST_TOOL, updateItem } from "./checklist.js";
@@ -252,9 +252,12 @@ const VIDEO_TOOLS = [
   },
   {
     name: "preview_voices",
-    description: "שולח לבעלים בווטסאפ הודעה קולית לדוגמה מכל קריין (הילה, אישה; אברי, גבר) עם משפט שאת כותבת, כדי שישמע לפני שבוחר קול. בחינם.",
+    description: `שולח לבעלים בווטסאפ תפריט קולות: לכל קול הודעה עם מספר ותיאור ואחריה הודעה קולית לדוגמה עם המשפט שאת כותבת. הקולות: ${VOICE_MENU.map((v, i) => `${i + 1}=${v.id} (${v.label})`).join(", ")}, ${VOICE_MENU.length + 1}=הילה (Microsoft, אישה), ${VOICE_MENU.length + 2}=אברי (Microsoft, גבר). כמעט בחינם.`,
     strict: true,
-    input_schema: strict({ text: { type: "string", description: "משפט הדגמה קצר בעברית, מתוך התסריט. שם העסק: יעקב פון" } }),
+    input_schema: strict({
+      text: { type: "string", description: "משפט הדגמה קצר בעברית, מתוך התסריט. שם העסק: יעקב פון" },
+      gender: { type: "string", enum: ["all", "female", "male"], description: "אילו קולות לשלוח: כולם, רק נשים או רק גברים (לפי הדמות שנבחרה)" },
+    }),
   },
   {
     name: "video_status",
@@ -301,7 +304,7 @@ const VIDEO_TOOLS = [
       },
       style: { type: "string", enum: Object.keys(STYLES) },
       size: { type: "string", enum: Object.keys(VIDEO_SIZES) },
-      voice: { type: "string", enum: ["female", "male", "native", "none"], description: "native = רק הסאונד המקורי של וידאו ה-AI (ברקע omni)" },
+      voice: { type: "string", description: `הקריין: "g:<שם>" לקול של גוגל (${VOICE_MENU.map((v) => v.id).join(", ")}), "female" (הילה), "male" (אברי), "native" (רק הסאונד המקורי של וידאו ה-AI), "none"` },
       music: { type: "string", enum: MUSIC },
       background: { type: "string", enum: ["omni", "ai", "photo", "clip", "graphic"] },
       phone: { type: "string", description: "טלפון לסצנה האחרונה, רק אם הבעלים נתן. אחרת ריק" },
@@ -532,17 +535,23 @@ export async function runTool(name, input, ctx) {
 
     case "preview_voices": {
       if (!hooks.sendMedia) return "אין חיבור לווטסאפ הרשמי.";
+      const menu = [
+        ...(getVideoKey() ? VOICE_MENU.map((v, i) => ({ n: i + 1, voice: `g:${v.id}`, name: v.id, label: v.label })) : []),
+        { n: VOICE_MENU.length + 1, voice: "female", name: "הילה", label: "אישה, Microsoft" },
+        { n: VOICE_MENU.length + 2, voice: "male", name: "אברי", label: "גבר, Microsoft" },
+      ].filter((v) => input.gender === "female" ? v.label.startsWith("אישה") : input.gender === "male" ? v.label.startsWith("גבר") : true);
       const out = [];
-      for (const [v, name] of [["female", "הילה"], ["male", "אברי"]]) {
+      for (const v of menu) {
         try {
-          const ogg = await voiceSample(input.text, v);
-          await hooks.sendMedia({ kind: "voice", buf: ogg, caption: `דוגמת קול: ${name}` });
-          out.push(name);
+          const ogg = await voiceSample(input.text, v.voice);
+          await hooks.sendMedia({ kind: "text", caption: `🔊 ${v.n}. ${v.name}: ${v.label}` });
+          await hooks.sendMedia({ kind: "voice", buf: ogg, caption: `${v.n}. ${v.name}` });
+          out.push(`${v.n}=${v.name} (voice "${v.voice}")`);
         } catch (e) {
-          out.push(`${name} נכשל (${e.message})`);
+          out.push(`${v.n}=${v.name} נכשל (${e.message.slice(0, 60)})`);
         }
       }
-      return `נשלחו לבעלים הודעות קוליות לדוגמה, לפי הסדר: ${out.join(", ")}. כתבי לו שהראשונה היא הילה והשנייה אברי. יש גם אפשרות "הדמות מדברת (AI)": את הקול הזה אי אפשר לשמוע מראש, כי הוא נוצר רק עם הסרטון.`;
+      return `נשלח לבעלים תפריט קולות, כל אחד עם מספר ודוגמה: ${out.join(", ")}. עכשיו שאלי אותו איזה מספר. ב-make_video העבירי ב-voice את הערך שבסוגריים (למשל "g:Kore" או "female"). יש גם "native": הדמות מדברת בעצמה בסרטון, ואותו אי אפשר לשמוע מראש.`;
     }
 
     case "video_status": {

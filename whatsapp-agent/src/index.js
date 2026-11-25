@@ -394,6 +394,7 @@ hooks.sendMedia = async (m) => {
   const to = ownerChat().split("@")[0];
   if (m.kind === "video") await cloud.cloudSendVideo(to, m.buf, m.caption);
   else if (m.kind === "voice") await cloud.cloudSendVoice(to, m.buf);
+  else if (m.kind === "text") return sendText(ownerChat(), m.caption);
   else await cloud.cloudSendImage(to, m.png || m.buf, m.caption, m.mime || "image/png");
   logMessage(ownerChat(), "bot", `${m.kind === "voice" ? "🔊" : m.kind === "video" ? "🎬" : "🖼️"} ${m.caption || ""}`);
 };

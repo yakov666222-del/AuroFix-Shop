@@ -4,6 +4,7 @@
 import { spawn } from "node:child_process";
 import ffmpegPath from "ffmpeg-static";
 import { MsEdgeTTS, OUTPUT_FORMAT } from "msedge-tts";
+import { geminiSpeech } from "./omni.js";
 
 const VOICE = process.env.TTS_VOICE || "he-IL-HilaNeural"; // קול אישה (הבעלים ביקש). קול גבר: he-IL-AvriNeural
 const MAX_CHARS = 1800; // בערך שתי דקות דיבור
@@ -70,10 +71,13 @@ async function googleTTS(text) {
   return { buf: Buffer.concat(bufs), ext: "mp3" };
 }
 
+// פורמט הקלט ל-ffmpeg. קול גולמי של גוגל (PCM) צריך גם קצב דגימה וערוצים
+const inFmt = (ext) => (ext === "s16le" ? ["-f", "s16le", "-ar", "24000", "-ac", "1"] : ["-f", ext]);
+
 // ממיר כל קובץ קול ל-WAV (48kHz מונו), בשביל סרטונים. משך = (גודל - 44) / 96000 שניות
 export function toWav(input, ext) {
   return new Promise((resolve, reject) => {
-    const p = spawn(ffmpegPath, ["-hide_banner", "-loglevel", "error", "-f", ext, "-i", "pipe:0", "-vn", "-ac", "1", "-ar", "48000", "-c:a", "pcm_s16le", "-f", "wav", "pipe:1"]);
+    const p = spawn(ffmpegPath, ["-hide_banner", "-loglevel", "error", ...inFmt(ext), "-i", "pipe:0", "-vn", "-ac", "1", "-ar", "48000", "-c:a", "pcm_s16le", "-f", "wav", "pipe:1"]);
     const out = [];
     let err = "";
     const t = setTimeout(() => { p.kill("SIGKILL"); reject(new Error("ההמרה של הקול לקחה יותר מדי זמן")); }, 30000);
@@ -93,9 +97,20 @@ export function toWav(input, ext) {
 
 // קריינות לסרטון: WAV בקול שנבחר (אישה: הילה, גבר: אברי)
 export const VOICES = { female: "he-IL-HilaNeural", male: "he-IL-AvriNeural" };
+// קול של גוגל: מזהה בצורה "g:Kore". מחזיר { buf, ext } שמתאים ל-ffmpeg
+async function googleVoice(text, voice) {
+  const r = await geminiSpeech(text, voice.slice(2));
+  const ext = /l16|pcm/i.test(r.mime) ? "s16le" : /mp3|mpeg/i.test(r.mime) ? "mp3" : "wav";
+  return { buf: r.buf, ext };
+}
+
 export async function narrationWav(text, voice = "female") {
   const clean = speakable(text);
   if (!clean) return null;
+  if (String(voice).startsWith("g:")) {
+    const a = await googleVoice(clean, voice);
+    return toWav(a.buf, a.ext);
+  }
   let audio;
   try {
     audio = await edgeTTS(clean, VOICES[voice] || VOICES.female);
@@ -110,7 +125,7 @@ function toOggOpus(input, ext) {
   return new Promise((resolve, reject) => {
     // WebM כבר ב-Opus: רק מעבירים לקופסה של OGG. MP3: מקודדים ל-Opus
     const codec = ext === "webm" ? ["-c:a", "copy"] : ["-c:a", "libopus", "-b:a", "32k", "-ac", "1", "-ar", "48000"];
-    const p = spawn(ffmpegPath, ["-hide_banner", "-loglevel", "error", "-f", ext, "-i", "pipe:0", "-vn", ...codec, "-f", "ogg", "pipe:1"]);
+    const p = spawn(ffmpegPath, ["-hide_banner", "-loglevel", "error", ...inFmt(ext), "-i", "pipe:0", "-vn", ...codec, "-f", "ogg", "pipe:1"]);
     const out = [];
     let err = "";
     const t = setTimeout(() => { p.kill("SIGKILL"); reject(new Error("ההמרה של הקול לקחה יותר מדי זמן")); }, 30000);
@@ -130,7 +145,7 @@ function toOggOpus(input, ext) {
 
 /** דוגמת קול לבחירה: OGG בקול מסוים (female/male) */
 export async function voiceSample(text, voice = "female") {
-  const a = await edgeTTS(speakable(text), VOICES[voice] || VOICES.female);
+  const a = String(voice).startsWith("g:") ? await googleVoice(speakable(text), voice) : await edgeTTS(speakable(text), VOICES[voice] || VOICES.female);
   return toOggOpus(a.buf, a.ext);
 }
 

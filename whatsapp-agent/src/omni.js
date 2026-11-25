@@ -141,3 +141,51 @@ export async function generateImage(prompt, { refs = [], aspect = "9:16" } = {})
   if (!img) throw new Error(`גוגל לא החזיר תמונה (${res.candidates?.[0]?.finishReason || res.promptFeedback?.blockReason || "לא ידוע"})`);
   return { buf: Buffer.from(img.inlineData.data, "base64"), mime: img.inlineData.mimeType || "image/png" };
 }
+
+// ---------- קריינות של גוגל (Gemini TTS): הרבה קולות, תומך בעברית ----------
+export const TTS_MODEL = process.env.TTS_MODEL || "gemini-3.8-flash-tts";
+// תפריט קולות: השם אצל גוגל והתיאור בעברית
+export const VOICE_MENU = [
+  { id: "Sulafat", label: "אישה, חמה ונעימה" },
+  { id: "Kore", label: "אישה, בטוחה ותקיפה" },
+  { id: "Leda", label: "אישה, צעירה ורעננה" },
+  { id: "Aoede", label: "אישה, קלילה ומשוחררת" },
+  { id: "Achernar", label: "אישה, רכה ושקטה" },
+  { id: "Pulcherrima", label: "אישה, נמרצת וישירה" },
+  { id: "Gacrux", label: "אישה, בוגרת ומנוסה" },
+  { id: "Charon", label: "גבר, מקצועי ומסביר" },
+  { id: "Puck", label: "גבר, אנרגטי ושמח" },
+  { id: "Fenrir", label: "גבר, נלהב ומתלהב" },
+  { id: "Algenib", label: "גבר, עמוק ומחוספס" },
+  { id: "Achird", label: "גבר, חברי וזורם" },
+  { id: "Sadaltager", label: "גבר, בוגר ואמין" },
+  { id: "Orus", label: "גבר, תקיף וסמכותי" },
+];
+
+/** קריינות בקול של גוגל. מחזיר WAV */
+export async function geminiSpeech(text, voice, style = "") {
+  if (!getVideoKey()) throw new Error("אין מפתח של גוגל בתשלום לקולות של גוגל");
+  const res = await api("interactions", {
+    method: "POST",
+    timeout: 90_000,
+    body: {
+      model: TTS_MODEL,
+      input: [{ type: "user_input", content: [{ type: "text", text, annotations: [{ type: "speech_metadata", style: `Native Israeli Hebrew speaker, natural Israeli accent. ${style}`.trim() }] }] }],
+      response_format: { type: "audio" },
+      generation_config: { speech_config: [{ voice }] },
+      store: false,
+    },
+  });
+  chargeUsage(0.002);
+  const audio = (function find(o) {
+    if (!o || typeof o !== "object") return null;
+    if ((o.type === "audio" || String(o.mime_type || "").startsWith("audio/")) && o.data) return o;
+    for (const v of Array.isArray(o) ? o : Object.values(o)) {
+      const f = find(v);
+      if (f) return f;
+    }
+    return null;
+  })(res);
+  if (!audio) throw new Error("גוגל לא החזיר קול");
+  return { buf: Buffer.from(audio.data, "base64"), mime: audio.mime_type || "audio/wav" };
+}
