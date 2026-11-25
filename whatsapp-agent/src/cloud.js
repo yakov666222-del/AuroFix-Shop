@@ -137,6 +137,21 @@ export async function downloadAudio(mediaId, directUrl) {
 }
 
 // שליחת הודעה קולית: מעלים את הקובץ לווטסאפ ושולחים לפי המזהה שלו
+// שליחת תמונה (למשל מודעה שהיועצת עיצבה): מעלים לווטסאפ ושולחים לפי המזהה
+export async function cloudSendImage(toPhone, pngBuf, caption = "") {
+  const form = new FormData();
+  form.append("messaging_product", "whatsapp");
+  form.append("type", "image/png");
+  form.append("file", new Blob([pngBuf], { type: "image/png" }), "ad.png");
+  const up = await fetch(`${base()}/${cfg.phoneNumberId}/media`, { method: "POST", headers: authHeaders(), body: form, signal: AbortSignal.timeout(30000) });
+  const upData = await up.json().catch(() => ({}));
+  if (!up.ok || !upData.id) throw new Error(upData?.error?.message || `העלאת התמונה נכשלה (${up.status})`);
+  await graph(`${cfg.phoneNumberId}/messages`, {
+    method: "POST",
+    body: JSON.stringify({ messaging_product: "whatsapp", to: normPhone(toPhone), type: "image", image: { id: upData.id, caption: String(caption).slice(0, 1000) } }),
+  });
+}
+
 export async function cloudSendVoice(toPhone, oggBuf) {
   const form = new FormData();
   form.append("messaging_product", "whatsapp");

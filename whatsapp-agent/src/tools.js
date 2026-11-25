@@ -6,12 +6,15 @@ import * as lab from "./lab.js";
 import fs from "node:fs";
 import path from "node:path";
 import { DATA_DIR } from "./store.js";
+import { renderAd, STYLES, SIZES } from "./creative.js";
 import { CHECKLIST_TOOL, updateItem } from "./checklist.js";
 
 // שינויי מלאי שממתינים לאישור הבעלים ("כן"). מבוצעים רק ב-index.js, לא על ידי המודל.
 export const pendingChanges = [];
 // רשימות שהקוד בונה מהמערכת ומצורפות לתשובה כמו שהן (כדי שהמודל לא ישכתב שמות ומספרים)
 export const replyAppendix = [];
+// תמונות שהיועצת עיצבה בתור הזה (מודעות). נשלחות לבעלים בווטסאפ אחרי התשובה
+export const replyImages = [];
 
 // ---------- בקרה על שינויים במערכת ----------
 // כל שינוי נבדק מול המערכת אחרי הביצוע, נרשם ביומן, והבעלים מקבל את מה שבאמת נכנס (לא מה שהמודל אומר)
@@ -191,7 +194,27 @@ const LAB_TOOLS = [
   },
 ];
 
+const CREATIVE_TOOLS = [
+  {
+    name: "make_ad_image",
+    description:
+      "מעצב תמונת מודעה לעסק (פוסט, סטורי או מודעה ממומנת) עם טקסט בעברית, ושולח אותה לבעלים בווטסאפ. את הטקסטים כותבת את: כותרת קצרה וחזקה (עד 8 מילים), משפט תועלת, מחיר או הצעה, וקריאה לפעולה. סגנונות: tech (כהה עם זוהר ירוק, כמו סוכני AI), brand (צבעי YakovPhone, כחול כהה וזהב), sale (מבצע אדום-צהוב בולט), clean (לבן ונקי). גדלים: square (פוסט פייסבוק/אינסטגרם), story (סטורי/סטטוס/טיקטוק), wide (מודעה ממומנת בפייסבוק). אפשר לקרוא כמה פעמים כדי לתת כמה גרסאות.",
+    strict: true,
+    input_schema: strict({
+      headline: { type: "string", description: "כותרת ראשית, עד 8 מילים" },
+      sub: { type: "string", description: "משפט תועלת אחד או שניים. ריק אם אין" },
+      price: { type: "string", description: "מחיר או הצעה, למשל 'מ-199 ₪' או 'אבחון חינם'. ריק אם אין" },
+      cta: { type: "string", description: "קריאה לפעולה קצרה, למשל 'שלחו הודעה בווטסאפ'" },
+      badge: { type: "string", description: "תגית קטנה מעל הכותרת, למשל 'מבצע השבוע'. ריק אם אין" },
+      phone: { type: "string", description: "טלפון להצגה במודעה. ריק אם הבעלים לא נתן" },
+      style: { type: "string", enum: Object.keys(STYLES) },
+      size: { type: "string", enum: Object.keys(SIZES) },
+    }),
+  },
+];
+
 export const OWNER_TOOLS = [
+  ...CREATIVE_TOOLS,
   {
     name: "remember",
     description:
@@ -339,6 +362,18 @@ export async function runTool(name, input, ctx) {
         labIncome !== null ? `\nתשלומים שנרשמו במערכת המעבדה: ${Math.round(labIncome)} ₪ (ייתכן שחלקם כבר דווחו גם בווטסאפ, אל תספור פעמיים)` : ""
       }
 רישומים אחרונים:\n${recent.join("\n") || "אין"}`;
+    }
+
+    case "make_ad_image": {
+      if (!String(input.headline || "").trim()) return "חסרה כותרת למודעה.";
+      if (replyImages.length >= 4) return "כבר עוצבו 4 תמונות בתשובה הזו. אם צריך עוד, הבעלים יבקש.";
+      const png = renderAd(input);
+      const dir = path.join(DATA_DIR, "creatives");
+      fs.mkdirSync(dir, { recursive: true });
+      const file = path.join(dir, `ad-${Date.now()}-${input.style}-${input.size}.png`);
+      fs.writeFileSync(file, png);
+      replyImages.push({ png, caption: `${input.headline}${input.price ? ` | ${input.price}` : ""}` });
+      return `התמונה עוצבה (${input.style}, ${input.size}) ותישלח לבעלים בווטסאפ מיד אחרי התשובה שלך. אל תתאר אותה באריכות, רק שורה אחת על הרעיון, ואם יש, את טקסט הפוסט שילווה אותה.`;
     }
 
     case "show_inventory_list": {

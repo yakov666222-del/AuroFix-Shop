@@ -19,7 +19,7 @@ import fs from "node:fs";
 import { OPENING, getApiKey, getGeminiKey, runAgent } from "./agent.js";
 import * as lab from "./lab.js";
 import { DATA_DIR, appendHistory, chats, clearHistory, convo, logMessage, memory, reminders, saveReminders, saveSettings, settings } from "./store.js";
-import { auditLog, findChat, pendingChanges, phoneToJid, replyAppendix } from "./tools.js";
+import { auditLog, findChat, pendingChanges, phoneToJid, replyAppendix, replyImages } from "./tools.js";
 import * as cloud from "./cloud.js";
 import { CHAT_HTML, MANIFEST, SW_JS } from "./chat-page.js";
 import { synthesize } from "./voice.js";
@@ -365,6 +365,16 @@ async function ownerReply(text, images, isVoice, { voice = false } = {}) {
 async function handleOwner(text, images, isVoice, replyJid = selfJid) {
   const reply = await ownerReply(text, images, isVoice);
   if (reply) await sendText(replyJid, reply).catch((e) => logger.error(e, "send reply"));
+  await sendReplyImages();
+}
+
+// מודעות שהיועצת עיצבה: נשלחות כתמונות לבעלים בווטסאפ
+async function sendReplyImages() {
+  const imgs = replyImages.splice(0);
+  if (!imgs.length || !cloud.cloudEnabled()) return;
+  for (const im of imgs) {
+    await cloud.cloudSendImage(ownerChat().split("@")[0], im.png, im.caption).catch((e) => logger.error(e, "send ad image"));
+  }
 }
 
 // ---------- ווטסאפ רשמי: הודעות נכנסות מ-Meta ----------
@@ -429,6 +439,7 @@ async function handleOwnerVoice(m) {
     await cloud.cloudSendVoice(to.split("@")[0], ogg);
     logMessage(to, "bot", `🔊 ${spoken || reply}`);
     if (needsText) await sendText(to, details ? `📝 ${details}` : reply);
+    await sendReplyImages();
   } catch (e) {
     logger.error(e, "voice reply failed, sending text");
     await sendText(to, reply).catch((err) => logger.error(err, "send reply"));
@@ -824,8 +835,10 @@ http
           ? [{ media_type: body.image.media_type, data: body.image.data }]
           : [];
       const reply = (await ownerReply(String(body.text || "").slice(0, 4000), images, false)) || "";
+      const hadImages = replyImages.length;
+      await sendReplyImages();
       res.writeHead(200, { "Content-Type": "application/json" });
-      return res.end(JSON.stringify({ reply }));
+      return res.end(JSON.stringify({ reply: hadImages ? `${reply}\n\n🖼️ ${hadImages} תמונות נשלחו אליך בווטסאפ.` : reply }));
     }
     // ---------- קיצור Apple Shortcuts ("עוזר יעקב"): הוראה בעברית -> פעולה באייפון ----------
     if (url.pathname === "/shortcut" && req.method === "POST") {
