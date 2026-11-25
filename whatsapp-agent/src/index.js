@@ -19,7 +19,7 @@ import fs from "node:fs";
 import { OPENING, getApiKey, getGeminiKey, runAgent } from "./agent.js";
 import * as lab from "./lab.js";
 import { DATA_DIR, appendHistory, chats, clearHistory, convo, logMessage, memory, reminders, saveReminders, saveSettings, settings } from "./store.js";
-import { auditLog, findChat, pendingChanges, phoneToJid, quiz, replyAppendix, replyImages } from "./tools.js";
+import { auditLog, findChat, hooks, pendingChanges, phoneToJid, quiz, replyAppendix, replyImages } from "./tools.js";
 import { saveOwnerMedia } from "./video.js";
 import * as cloud from "./cloud.js";
 import { CHAT_HTML, MANIFEST, SW_JS } from "./chat-page.js";
@@ -386,6 +386,15 @@ async function sendReplyImages() {
   }
   if (quiz.pending && !quiz.pending.sent) await sendQuizStep();
 }
+
+// סרטון שמוכן אחרי כמה דקות (תמונות AI): נשלח לבעלים ישירות
+hooks.sendMedia = async (m) => {
+  if (!cloud.cloudEnabled()) throw new Error("אין ווטסאפ רשמי");
+  const to = ownerChat().split("@")[0];
+  if (m.kind === "video") await cloud.cloudSendVideo(to, m.buf, m.caption);
+  else await cloud.cloudSendImage(to, m.png, m.caption);
+  logMessage(ownerChat(), "bot", `🎬 ${m.caption}`);
+};
 
 // ---------- שאלון בחירה: שאלה אחרי שאלה עם כפתורים, בלי לחכות למוח בין שאלה לשאלה ----------
 const quizPrefix = () => `q${quiz.pending.at.toString(36)}_${quiz.pending.step}_`;

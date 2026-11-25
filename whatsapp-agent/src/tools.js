@@ -7,7 +7,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { DATA_DIR } from "./store.js";
 import { renderAd, STYLES, SIZES } from "./creative.js";
-import { makeVideo, recentOwnerMedia, VIDEO_SIZES, MUSIC } from "./video.js";
+import { makeVideo, recentOwnerMedia, VIDEO_SIZES, MUSIC, aiMinutes } from "./video.js";
 import { cloudEnabled } from "./cloud.js";
 import { CHECKLIST_TOOL, updateItem } from "./checklist.js";
 
@@ -19,6 +19,9 @@ export const replyAppendix = [];
 export const replyImages = [];
 // שאלון בחירה שהיועצת הכינה: נשלח לבעלים שאלה אחרי שאלה עם כפתורים, ובסוף כל התשובות חוזרות אליה בהודעה אחת
 export const quiz = { pending: null };
+// שליחת מדיה לבעלים מחוץ לתשובה (סרטון שמוכן אחרי כמה דקות). index.js ממלא את זה
+export const hooks = { sendMedia: null };
+let videoBusy = false;
 
 // ---------- בקרה על שינויים במערכת ----------
 // כל שינוי נבדק מול המערכת אחרי הביצוע, נרשם ביומן, והבעלים מקבל את מה שבאמת נכנס (לא מה שהמודל אומר)
@@ -462,6 +465,30 @@ export async function runTool(name, input, ctx) {
         if (!clip) return "אין סרטון מהבעלים מ-48 השעות האחרונות. בקשי ממנו לצלם ולשלוח סרטון קצר (5-30 שניות), למשל הוא במעבדה מתקן מכשיר, ואז תיצרי את הסרטון. או הציעי רקע גרפי.";
       }
       const t0 = Date.now();
+      if (input.background === "ai") {
+        // תמונות AI בחינם לוקחות כמה דקות: הסרטון נוצר ברקע ונשלח לבעלים כשהוא מוכן
+        if (videoBusy) return "כבר נוצר סרטון ברגעים אלה. אמרי לבעלים שיחכה לו, ושאחריו אפשר להכין עוד אחד.";
+        if (!hooks.sendMedia) return "אין חיבור לווטסאפ הרשמי, אז אי אפשר לשלוח סרטון. הציעי רקע graphic.";
+        videoBusy = true;
+        const mins = aiMinutes(input.scenes || []) + 1;
+        (async () => {
+          try {
+            const { mp4, seconds } = await makeVideo({ ...input, photos, clip });
+            if (mp4.length > 15.5 * 1024 * 1024) throw new Error("הסרטון יצא גדול מדי לווטסאפ");
+            const dir = path.join(DATA_DIR, "creatives");
+            fs.mkdirSync(dir, { recursive: true });
+            fs.writeFileSync(path.join(dir, `video-${Date.now()}-ai-${input.size}.mp4`), mp4);
+            await hooks.sendMedia({ kind: "video", buf: mp4, caption: input.caption || "🎬 הסרטון מוכן" });
+            console.log(`🎬 סרטון AI נוצר ונשלח: ${seconds} שניות, ${Math.round((Date.now() - t0) / 1000)} שניות עבודה`);
+          } catch (e) {
+            console.log(`⚠️ סרטון AI נכשל: ${e.message}`);
+            await ctx.notifyOwner?.(`⚠️ לא הצלחתי לסיים את הסרטון (${e.message}). אפשר לבקש שוב, או סרטון עם רקע גרפי שיוצא מיד.`).catch(() => {});
+          } finally {
+            videoBusy = false;
+          }
+        })();
+        return `התחלתי ליצור את הסרטון. התמונות הריאליסטיות נוצרות בשירות חינמי שמרשה תמונה אחת כל 45 שניות, אז הסרטון יגיע לבעלים בווטסאפ בעוד כ-${mins} דקות. אמרי לו את זה במשפט אחד, ותני כבר עכשיו את הטקסט לפוסט עם 5 האשטגים.`;
+      }
       const { mp4, seconds } = await makeVideo({ ...input, photos, clip });
       if (mp4.length > 15.5 * 1024 * 1024) return "הסרטון יצא גדול מדי לווטסאפ. נסי פחות סצנות או גודל square.";
       const dir = path.join(DATA_DIR, "creatives");

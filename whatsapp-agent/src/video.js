@@ -52,9 +52,16 @@ function musicExpr(kind) {
 // ---------- תמונות AI לסצנות (בחינם, שירות Pollinations, בלי מפתח) ----------
 // סגנון קבוע: צילום ריאליסטי וקולנועי. אותו seed לכל הסצנות, כדי שהדמות והמראה יהיו עקביים ככל האפשר
 const AI_LOOK = ", photorealistic commercial photography, cinematic lighting, shallow depth of field, 35mm, high detail, no text, no letters, no watermark";
+// השירות החינמי מרשה תמונה אחת כל 45 שניות לכל שרת. לכן התמונות נוצרות אחת אחרי השנייה, עם המתנה ביניהן
+let lastAiAt = 0;
+const AI_GAP_MS = 46_000;
+const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 async function fetchAiImage(prompt, w, h, seed, file) {
   const url = `https://image.pollinations.ai/prompt/${encodeURIComponent(prompt + AI_LOOK)}?width=${w}&height=${h}&nologo=true&model=flux&seed=${seed}`;
-  for (let attempt = 0; attempt < 2; attempt++) {
+  for (let attempt = 0; attempt < 4; attempt++) {
+    const gap = lastAiAt + AI_GAP_MS - Date.now();
+    if (gap > 0) await wait(gap);
+    lastAiAt = Date.now();
     try {
       const r = await fetch(url, { signal: AbortSignal.timeout(120_000) });
       const type = r.headers.get("content-type") || "";
@@ -65,26 +72,30 @@ async function fetchAiImage(prompt, w, h, seed, file) {
           return file;
         }
       }
+      // הגענו למגבלה: מחכים כמה שהשירות ביקש
+      const retry = Number(r.headers.get("retry-after")) || 45;
+      if (r.status === 402 || r.status === 429) lastAiAt = Date.now() + retry * 1000 - AI_GAP_MS + 1000;
     } catch {}
   }
   return null;
 }
+export const AI_MAX_IMAGES = 5;
+// כמה זמן בערך ייקח ליצור את התמונות (בדקות), כדי להגיד לבעלים מראש
+export const aiMinutes = (scenes) => Math.ceil((Math.min(AI_MAX_IMAGES, scenes.filter((s) => s.image_prompt).length) * AI_GAP_MS) / 60_000 + 0.5);
 async function generateAiImages(scenes, W, H, tmp) {
   const seed = Math.floor(Math.random() * 1e6);
   const out = new Array(scenes.length).fill(null);
-  const h = Math.round(H * 1.08); // קצת יותר גבוה, כי חותכים את התחתית
-  let next = 0;
-  // שתי תמונות במקביל: מהיר יותר, ולא מעמיס על השירות החינמי
-  const worker = async () => {
-    while (next < scenes.length) {
-      const i = next++;
-      const prompt = scenes[i].image_prompt || "";
-      if (!prompt) continue;
-      out[i] = await fetchAiImage(prompt, W, h, seed, path.join(tmp, `ai${i}.jpg`));
-      if (!out[i]) console.log(`⚠️ תמונת AI לסצנה ${i + 1} לא נוצרה, משתמשים ברקע גרפי`);
-    }
-  };
-  await Promise.all([worker(), worker()]);
+  const h = Math.round(H * 1.08); // קצת יותר גבוה, כי חותכים את התחתית (סימן המים)
+  let made = 0;
+  for (let i = 0; i < scenes.length; i++) {
+    const prompt = scenes[i].image_prompt || "";
+    if (!prompt || made >= AI_MAX_IMAGES) continue;
+    out[i] = await fetchAiImage(prompt, W, h, seed, path.join(tmp, `ai${i}.jpg`));
+    if (out[i]) made++;
+    else console.log(`⚠️ תמונת AI לסצנה ${i + 1} לא נוצרה, משתמשים ברקע גרפי`);
+  }
+  // סצנות שלא קיבלו תמונה משלהן (מעל המכסה) משתמשות בתמונה של הסצנה הקודמת שיש לה
+  for (let i = 0; i < scenes.length; i++) if (!out[i] && scenes[i].image_prompt) out[i] = out.slice(0, i).reverse().find(Boolean) || null;
   return out;
 }
 
