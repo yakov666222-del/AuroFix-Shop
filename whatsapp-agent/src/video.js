@@ -6,7 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import ffmpegPath from "ffmpeg-static";
-import { renderAd } from "./creative.js";
+import { renderAd, renderCinematic } from "./creative.js";
 import { narrationWav } from "./voice.js";
 import { DATA_DIR } from "./store.js";
 
@@ -49,6 +49,45 @@ function musicExpr(kind) {
   return `0.035*${pad}+${kick}+${hat}`;
 }
 
+// ---------- תמונות AI לסצנות (בחינם, שירות Pollinations, בלי מפתח) ----------
+// סגנון קבוע: צילום ריאליסטי וקולנועי. אותו seed לכל הסצנות, כדי שהדמות והמראה יהיו עקביים ככל האפשר
+const AI_LOOK = ", photorealistic commercial photography, cinematic lighting, shallow depth of field, 35mm, high detail, no text, no letters, no watermark";
+async function fetchAiImage(prompt, w, h, seed, file) {
+  const url = `https://image.pollinations.ai/prompt/${encodeURIComponent(prompt + AI_LOOK)}?width=${w}&height=${h}&nologo=true&model=flux&seed=${seed}`;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const r = await fetch(url, { signal: AbortSignal.timeout(120_000) });
+      const type = r.headers.get("content-type") || "";
+      if (r.ok && type.startsWith("image/")) {
+        const buf = Buffer.from(await r.arrayBuffer());
+        if (buf.length > 5000) {
+          fs.writeFileSync(file, buf);
+          return file;
+        }
+      }
+    } catch {}
+  }
+  return null;
+}
+async function generateAiImages(scenes, W, H, tmp) {
+  const seed = Math.floor(Math.random() * 1e6);
+  const out = new Array(scenes.length).fill(null);
+  const h = Math.round(H * 1.08); // קצת יותר גבוה, כי חותכים את התחתית
+  let next = 0;
+  // שתי תמונות במקביל: מהיר יותר, ולא מעמיס על השירות החינמי
+  const worker = async () => {
+    while (next < scenes.length) {
+      const i = next++;
+      const prompt = scenes[i].image_prompt || "";
+      if (!prompt) continue;
+      out[i] = await fetchAiImage(prompt, W, h, seed, path.join(tmp, `ai${i}.jpg`));
+      if (!out[i]) console.log(`⚠️ תמונת AI לסצנה ${i + 1} לא נוצרה, משתמשים ברקע גרפי`);
+    }
+  };
+  await Promise.all([worker(), worker()]);
+  return out;
+}
+
 /**
  * יוצר סרטון. מחזיר { mp4: Buffer, seconds }
  * @param {{scenes:{headline:string, sub?:string, price?:string, cta?:string, badge?:string, voice_text?:string, seconds?:number}[],
@@ -62,10 +101,13 @@ export async function makeVideo(o) {
   const bgMode = o.background || "graphic";
   if (bgMode === "photo" && !o.photos?.length) throw new Error("אין תמונות לרקע");
   if (bgMode === "clip" && !o.clip) throw new Error("אין סרטון לרקע");
+  // קולנועי: תמונה מלאה עם כתוביות למטה וכרטיס סיום עם לוגו. גרפי: העיצוב הרגיל
+  const cinematic = bgMode !== "graphic";
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "ad-video-"));
   try {
-    // 1. קריינות: קובעת את האורך של כל סצנה
+    // 1. קריינות ותמונות AI במקביל: הקריינות קובעת את האורך של כל סצנה
     const durs = [];
+    const aiJobs = bgMode === "ai" ? generateAiImages(scenes, W, H, tmp) : Promise.resolve([]);
     for (let i = 0; i < scenes.length; i++) {
       const s = scenes[i];
       let wav = null;
@@ -77,12 +119,17 @@ export async function makeVideo(o) {
       if (wav) fs.writeFileSync(path.join(tmp, `v${i}.wav`), wav);
       durs.push(Math.min(14, Math.max(Number(s.seconds) || 3, wav ? spoken + 0.9 : 0)));
     }
+    const aiImages = await aiJobs;
     const total = durs.reduce((a, b) => a + b, 0) - (scenes.length - 1) * T;
 
-    // 2. רקע: גרפי (נוצר פעם אחת, גדול יותר בשביל תנועת זום), תמונות, או סרטון שמנורמל לגודל
+    // 2. רקעים: גרפי (גדול יותר בשביל תנועת זום), כרטיס סיום, ו/או סרטון שמנורמל לגודל
     const big = [Math.round(W * 1.5), Math.round(H * 1.5)];
     const base = { style: o.style, phone: o.phone, brand: o.brand };
-    if (bgMode === "graphic") fs.writeFileSync(path.join(tmp, "bg.png"), renderAd({ ...base, headline: "x", dims: big, layer: "bg" }));
+    fs.writeFileSync(path.join(tmp, "bg.png"), renderAd({ ...base, headline: "x", dims: big, layer: "bg" }));
+    if (cinematic) {
+      fs.writeFileSync(path.join(tmp, "endbg.png"), renderCinematic({ ...base, dims: big, layer: "endbg" }));
+      fs.writeFileSync(path.join(tmp, "shade.png"), renderCinematic({ ...base, dims: [W, H], layer: "shade" }));
+    }
     if (bgMode === "clip") {
       await ffmpeg(["-stream_loop", "-1", "-i", o.clip, "-t", String(total + 2), "-an",
         "-vf", `scale=${W}:${H}:force_original_aspect_ratio=increase,crop=${W}:${H},fps=${FPS},setsar=1`,
@@ -96,33 +143,58 @@ export async function makeVideo(o) {
       const d = durs[i];
       const frames = Math.round(d * FPS);
       starts.push(start);
-      const layer = (l) => renderAd({ ...base, ...scenes[i], phone: i === scenes.length - 1 ? o.phone : "", dims: [W, H], layer: l, center: true, shade: bgMode !== "graphic" });
-      fs.writeFileSync(path.join(tmp, `a${i}.png`), layer("a"));
-      fs.writeFileSync(path.join(tmp, `b${i}.png`), layer("b"));
+      const sc = scenes[i];
+      const isLast = i === scenes.length - 1;
+      const endCard = cinematic && isLast && (sc.cta || sc.end);
+      const phone = isLast ? o.phone : "";
+      let la, lb;
+      if (endCard) {
+        la = renderCinematic({ ...base, ...sc, phone, dims: [W, H], layer: "enda" });
+        lb = renderCinematic({ ...base, ...sc, phone, dims: [W, H], layer: "endb" });
+      } else if (cinematic) {
+        la = renderCinematic({ ...base, ...sc, dims: [W, H], layer: "a" });
+        lb = renderCinematic({ ...base, ...sc, dims: [W, H], layer: "b" });
+      } else {
+        const layer = (l) => renderAd({ ...base, ...sc, phone, dims: [W, H], layer: l, center: true });
+        la = layer("a");
+        lb = layer("b");
+      }
+      fs.writeFileSync(path.join(tmp, `a${i}.png`), la);
+      fs.writeFileSync(path.join(tmp, `b${i}.png`), lb);
       const zoom = i % 2 ? `1.12-0.12*on/${frames}` : `1+0.12*on/${frames}`;
       const zp = `zoompan=z='${zoom}':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=${frames}:s=${W}x${H}:fps=${FPS}`;
       let bgIn;
       let bgF;
-      if (bgMode === "clip") {
+      if (bgMode === "clip" && !endCard) {
         bgIn = ["-ss", String(start), "-t", String(d), "-i", path.join(tmp, "clip.mp4")];
         bgF = `[0:v]setpts=PTS-STARTPTS,fps=${FPS}[bg]`;
       } else {
-        const img = bgMode === "photo" ? o.photos[i % o.photos.length] : path.join(tmp, "bg.png");
+        let img = path.join(tmp, "bg.png");
+        let crop = "";
+        if (endCard) img = path.join(tmp, "endbg.png");
+        else if (bgMode === "photo") img = o.photos[i % o.photos.length];
+        else if (bgMode === "ai" && aiImages[i]) {
+          img = aiImages[i];
+          crop = "crop=iw:ih*0.93:0:0,"; // חותכים את הפס התחתון (סימן המים של שירות התמונות)
+        }
         bgIn = ["-i", img];
-        bgF = `[0:v]scale=${big[0]}:${big[1]}:force_original_aspect_ratio=increase,crop=${big[0]}:${big[1]},setsar=1,${zp}[bg]`;
+        bgF = `[0:v]${crop}scale=${big[0]}:${big[1]}:force_original_aspect_ratio=increase,crop=${big[0]}:${big[1]},setsar=1,${zp}[bg]`;
       }
       const slide = Math.round(50 * (W / 720));
+      const useShade = cinematic && !endCard;
       const filter = [
         bgF,
+        ...(useShade ? [`[3:v]format=rgba[s]`, `[bg][s]overlay=0:0[bg2]`] : []),
         `[1:v]format=rgba,fade=t=in:st=0.2:d=0.5:alpha=1[a]`,
         `[2:v]format=rgba,fade=t=in:st=0.75:d=0.5:alpha=1[b]`,
-        `[bg][a]overlay=x=0:y='${slide}*max(0,min(1,1-(t-0.2)/0.5))':eval=frame[x]`,
+        `[${useShade ? "bg2" : "bg"}][a]overlay=x=0:y='${slide}*max(0,min(1,1-(t-0.2)/0.5))':eval=frame[x]`,
         `[x][b]overlay=x=0:y='${slide}*max(0,min(1,1-(t-0.75)/0.5))':eval=frame,format=yuv420p[v]`,
       ].join(";");
       await ffmpeg([
         ...bgIn,
         "-loop", "1", "-framerate", String(FPS), "-t", String(d), "-i", path.join(tmp, `a${i}.png`),
         "-loop", "1", "-framerate", String(FPS), "-t", String(d), "-i", path.join(tmp, `b${i}.png`),
+        ...(useShade ? ["-loop", "1", "-framerate", String(FPS), "-t", String(d), "-i", path.join(tmp, "shade.png")] : []),
         "-filter_complex", filter, "-map", "[v]", "-frames:v", String(frames),
         "-c:v", "libx264", "-preset", "ultrafast", "-crf", "18", "-r", String(FPS), path.join(tmp, `s${i}.mp4`),
       ]);

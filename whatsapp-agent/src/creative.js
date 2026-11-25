@@ -159,3 +159,91 @@ export function renderAd(o) {
 }
 
 export const __test = { wrap };
+
+// ---------- סגנון קולנועי (כמו מודעות וידאו של סוכני AI): תמונה מלאה, כתוביות בשליש התחתון, כרטיס סיום עם לוגו ----------
+// הלוגו המקורי של YakovPhone: טלפון עם ברק, בזהב
+const LOGO = (x, y, s) =>
+  `<g transform="translate(${x} ${y}) scale(${s})"><rect x="0" y="0" width="228" height="378" rx="30" fill="none" stroke="url(#gold)" stroke-width="14"/><polygon points="162,70 54,193 114,199 64,295 172,171 112,165" fill="url(#gold)"/><rect x="86" y="339" width="56" height="12" rx="6" fill="url(#gold)"/></g>`;
+
+/**
+ * שכבה אחת של סצנה קולנועית. layer: shade (הצללה קבועה + שם העסק), a (כותרת), b (שורה בזהב),
+ * endbg (רקע כרטיס הסיום), enda (לוגו ושם), endb (משפט, כפתור, טלפון)
+ */
+export function renderCinematic(o) {
+  const [W, H] = o.dims;
+  const st = STYLES[o.style] || STYLES.brand;
+  const gold = st === STYLES.tech ? st.accent : "#e2c892";
+  const s = W / 720;
+  const brand = o.brand || "YakovPhone";
+  const tagline = o.tagline ?? "מעבדת סלולר מתקדמת";
+  const shadow = `filter="url(#sh)"`;
+  const parts = [];
+  const center = W / 2;
+  const lines = (txt, size, maxLines) => wrap(txt, Math.floor((W * 0.86) / (size * 0.52)), maxLines);
+  if (o.layer === "shade") {
+    parts.push(`<rect y="${H * 0.5}" width="${W}" height="${H * 0.5}" fill="url(#fade)"/>`);
+    parts.push(`<text x="${W - 24 * s}" y="${H - 22 * s}" font-family="Heebo" font-weight="700" font-size="${16 * s}" fill="#ffffff" opacity="0.55" text-anchor="end" direction="ltr">${esc(brand)}</text>`);
+  }
+  if (o.layer === "a" || o.layer === "b") {
+    const hs = Math.round(46 * s);
+    const ss = Math.round(40 * s);
+    const hl = lines(o.headline, hs, 2);
+    const sl = o.sub ? lines(o.sub, ss, 2) : [];
+    // הבלוק נגמר בערך ב-88% מהגובה
+    let y = H * 0.88 - (hl.length * hs * 1.2 + sl.length * ss * 1.2);
+    for (const l of hl) {
+      y += hs * 1.2;
+      if (o.layer === "a") parts.push(`<text x="${center}" y="${y}" font-family="Heebo" font-weight="900" font-size="${hs}" fill="#ffffff" text-anchor="middle" direction="rtl" ${shadow}>${he(l)}</text>`);
+    }
+    for (const l of sl) {
+      y += ss * 1.2;
+      if (o.layer === "b") parts.push(`<text x="${center}" y="${y}" font-family="Heebo" font-weight="900" font-size="${ss}" fill="${gold}" text-anchor="middle" direction="rtl" ${shadow}>${he(l)}</text>`);
+    }
+  }
+  if (o.layer === "endbg") {
+    parts.push(`<rect width="${W}" height="${H}" fill="url(#endbg)"/>`);
+    parts.push(`<circle cx="${center}" cy="${H * 0.36}" r="${W * 0.45}" fill="${gold}" opacity="0.06"/>`);
+  }
+  if (o.layer === "enda") {
+    const ls = 0.42 * s * (H / W > 1.3 ? 1 : 0.7);
+    parts.push(LOGO(center - 114 * ls, H * 0.2, ls));
+    const by = H * 0.2 + 378 * ls + 80 * s;
+    parts.push(`<text x="${center}" y="${by}" font-family="Heebo" font-weight="900" font-size="${64 * s}" fill="${gold}" text-anchor="middle" direction="ltr">${esc(brand)}</text>`);
+    if (tagline) parts.push(`<text x="${center}" y="${by + 44 * s}" font-family="Heebo" font-weight="700" font-size="${28 * s}" fill="${gold}" opacity="0.85" text-anchor="middle" direction="rtl">${he(tagline)}</text>`);
+  }
+  if (o.layer === "endb") {
+    const ls = 0.42 * s * (H / W > 1.3 ? 1 : 0.7);
+    let y = H * 0.2 + 378 * ls + 80 * s + 110 * s;
+    const hs = Math.round(36 * s);
+    lines(o.headline, hs, 2).forEach((l) => {
+      y += hs * 1.3;
+      parts.push(`<text x="${center}" y="${y}" font-family="Heebo" font-weight="700" font-size="${hs}" fill="#ffffff" text-anchor="middle" direction="rtl">${he(l)}</text>`);
+    });
+    if (o.sub) {
+      lines(o.sub, hs, 2).forEach((l) => {
+        y += hs * 1.3;
+        parts.push(`<text x="${center}" y="${y}" font-family="Heebo" font-weight="900" font-size="${hs}" fill="${gold}" text-anchor="middle" direction="rtl">${he(l)}</text>`);
+      });
+    }
+    if (o.cta) {
+      const ch = 64 * s;
+      const cw = Math.min(W * 0.8, (o.cta.length * 22 + 90) * s);
+      y += 50 * s;
+      parts.push(`<rect x="${center - cw / 2}" y="${y}" width="${cw}" height="${ch}" rx="${ch / 2}" fill="${gold}"/>`);
+      parts.push(`<text x="${center}" y="${y + ch * 0.66}" font-family="Heebo" font-weight="900" font-size="${30 * s}" fill="#1a1406" text-anchor="middle" direction="rtl">${he(o.cta)}</text>`);
+      y += ch;
+    }
+    if (o.phone) parts.push(`<text x="${center}" y="${y + 60 * s}" font-family="Heebo" font-weight="700" font-size="${32 * s}" fill="#ffffff" text-anchor="middle" direction="ltr">${esc(o.phone)}</text>`);
+  }
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">
+  <defs>
+    <linearGradient id="gold" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#f2d27a"/><stop offset="1" stop-color="#c9952e"/></linearGradient>
+    <linearGradient id="fade" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#000" stop-opacity="0"/><stop offset="1" stop-color="#000" stop-opacity="0.8"/></linearGradient>
+    <radialGradient id="endbg" cx="0.5" cy="0.35" r="0.8"><stop offset="0" stop-color="#2a2418"/><stop offset="1" stop-color="#0b0a08"/></radialGradient>
+    <filter id="sh" x="-10%" y="-30%" width="120%" height="160%"><feDropShadow dx="0" dy="${2 * s}" stdDeviation="${4 * s}" flood-color="#000" flood-opacity="0.9"/></filter>
+  </defs>
+  ${parts.join("\n  ")}
+</svg>`;
+  const r = new Resvg(svg, { font: { fontFiles: FONTS, loadSystemFonts: false, defaultFontFamily: "Heebo" }, fitTo: { mode: "width", value: W } });
+  return r.render().asPng();
+}

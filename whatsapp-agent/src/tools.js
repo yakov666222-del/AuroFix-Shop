@@ -242,7 +242,7 @@ const VIDEO_TOOLS = [
   {
     name: "make_video",
     description:
-      "יוצר סרטון שיווקי (MP4) ושולח אותו לבעלים בווטסאפ. כל סצנה היא מסך עם כותרת שנכנסת באנימציה, משפט, מחיר וכפתור, עם קריינות בעברית, מוזיקת רקע ומעברים. רקע: graphic (עיצוב בסגנון שנבחר), photo (התמונות האחרונות שהבעלים שלח, אחת לכל סצנה), clip (הסרטון האחרון שהבעלים צילם, למשל הוא עצמו במעבדה). קריינות: female (הילה), male (אברי), none. מוזיקה: calm, energetic, none. גדלים: story (סטורי/ריל/טיקטוק/סטטוס), square (פוסט), wide (יוטיוב/פייסבוק). 3 עד 6 סצנות, כל אחת 2-5 שניות.",
+      "יוצר סרטון שיווקי (MP4) ושולח אותו לבעלים בווטסאפ. כל סצנה היא מסך עם כותרת שנכנסת באנימציה, משפט, מחיר וכפתור, עם קריינות בעברית, מוזיקת רקע ומעברים. רקע: ai (סרטון קולנועי כמו של סוכנויות AI: לכל סצנה תמונה ריאליסטית שנוצרת לפי image_prompt, למשל דוגמנית עם טלפון שבור, טכנאי במעבדה, צילום מקרו של תיקון; כתוביות למטה עם שורה בזהב, וכרטיס סיום עם הלוגו של YakovPhone וכפתור), photo (קולנועי עם התמונות האחרונות שהבעלים שלח), clip (קולנועי על הסרטון האחרון שהבעלים צילם), graphic (אנימציה גרפית בלי צילומים). קריינות: female (הילה), male (אברי), none. מוזיקה: calm, energetic, none. גדלים: story (סטורי/ריל/טיקטוק/סטטוס), square (פוסט), wide (יוטיוב/פייסבוק). 3 עד 6 סצנות, כל אחת 2-5 שניות.",
     strict: true,
     input_schema: strict({
       scenes: {
@@ -255,6 +255,7 @@ const VIDEO_TOOLS = [
           cta: { type: "string", description: "כפתור קריאה לפעולה, בדרך כלל רק בסצנה האחרונה, אחרת ריק" },
           badge: { type: "string", description: "תגית קטנה, או ריק" },
           voice_text: { type: "string", description: "מה הקריינית אומרת בסצנה (משפט אחד או שניים, טבעי). ריק = קוראת את הכותרת והמשפט" },
+          image_prompt: { type: "string", description: "רק ברקע ai: תיאור התמונה באנגלית, מפורט (מי, מה עושה, איפה, תאורה). אם יש דמות, חזרי על אותו תיאור דמות בכל הסצנות (למשל 'young woman with long wavy blonde hair, white shirt'). בלי טקסט בתמונה. אחרת ריק" },
           seconds: { type: "number", description: "משך מינימלי בשניות (2-5). הקריינות מאריכה לפי הצורך" },
         }),
       },
@@ -262,7 +263,7 @@ const VIDEO_TOOLS = [
       size: { type: "string", enum: Object.keys(VIDEO_SIZES) },
       voice: { type: "string", enum: ["female", "male", "none"] },
       music: { type: "string", enum: MUSIC },
-      background: { type: "string", enum: ["graphic", "photo", "clip"] },
+      background: { type: "string", enum: ["ai", "photo", "clip", "graphic"] },
       phone: { type: "string", description: "טלפון לסצנה האחרונה, רק אם הבעלים נתן. אחרת ריק" },
       caption: { type: "string", description: "טקסט קצר שיצורף לסרטון בווטסאפ" },
     }),
