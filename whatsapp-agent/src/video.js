@@ -1,0 +1,210 @@
+// סרטונים שיווקיים לעסק (MP4) בלי תשלום: כל סצנה היא שקופית מעוצבת עם תנועה,
+// טקסט שנכנס באנימציה, קריינות בעברית (קול אישה או גבר), מוזיקת רקע שנוצרת בקוד ומעברים בין סצנות.
+// הרקע יכול להיות גרפי, תמונות שהבעלים שלח, או סרטון שהבעלים צילם (למשל הוא עצמו במעבדה).
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { spawn } from "node:child_process";
+import ffmpegPath from "ffmpeg-static";
+import { renderAd } from "./creative.js";
+import { narrationWav } from "./voice.js";
+import { DATA_DIR } from "./store.js";
+
+export const VIDEO_SIZES = { story: [720, 1280], square: [720, 720], wide: [1280, 720] };
+export const MUSIC = ["none", "calm", "energetic"];
+const FPS = 30;
+const T = 0.45; // משך המעבר בין סצנות
+const TRANSITIONS = ["smoothup", "slideleft", "circleopen", "fade", "wipeleft", "fadeblack"];
+
+function ffmpeg(args, timeoutMs = 240_000) {
+  return new Promise((resolve, reject) => {
+    const p = spawn(ffmpegPath, ["-hide_banner", "-loglevel", "error", "-y", ...args]);
+    let err = "";
+    const t = setTimeout(() => { p.kill("SIGKILL"); reject(new Error("יצירת הסרטון לקחה יותר מדי זמן")); }, timeoutMs);
+    p.stderr.on("data", (c) => (err += c));
+    p.on("error", (e) => { clearTimeout(t); reject(e); });
+    p.on("close", (code) => {
+      clearTimeout(t);
+      if (code === 0) resolve();
+      else reject(new Error(`ffmpeg נכשל: ${err.slice(-400)}`));
+    });
+  });
+}
+
+// מוזיקת רקע שנוצרת מנוסחה (בלי זכויות יוצרים): calm = אקורדים רכים, energetic = אקורדים עם תוף בקצב 120
+function musicExpr(kind) {
+  const chords = [
+    [220, 261.63, 329.63], // Am
+    [174.61, 220, 261.63], // F
+    [196, 261.63, 329.63], // C
+    [196, 246.94, 293.66], // G
+  ];
+  const pick = (n) => `if(lt(mod(t,16),4),${chords[0][n]},if(lt(mod(t,16),8),${chords[1][n]},if(lt(mod(t,16),12),${chords[2][n]},${chords[3][n]})))`;
+  const env = "min(1,mod(t,4)*4)*min(1,(4-mod(t,4))*4)";
+  const pad = `${env}*(${[0, 1, 2].map((n) => `sin(2*PI*${pick(n)}*t)`).join("+")})`;
+  if (kind === "calm") return `0.13*${pad}*(0.75+0.25*sin(2*PI*0.25*t))`;
+  const m = "mod(t,0.5)";
+  const kick = `0.55*sin(2*PI*(45*${m}+3.6*(1-exp(-25*${m}))))*exp(-9*${m})`;
+  const hat = "0.05*(2*random(0)-1)*exp(-70*mod(t+0.25,0.5))";
+  return `0.035*${pad}+${kick}+${hat}`;
+}
+
+/**
+ * יוצר סרטון. מחזיר { mp4: Buffer, seconds }
+ * @param {{scenes:{headline:string, sub?:string, price?:string, cta?:string, badge?:string, voice_text?:string, seconds?:number}[],
+ *   style?:string, size?:string, voice?:"female"|"male"|"none", music?:string, background?:"graphic"|"photo"|"clip",
+ *   photos?:string[], clip?:string, phone?:string, brand?:string}} o
+ */
+export async function makeVideo(o) {
+  const scenes = (o.scenes || []).filter((s) => String(s?.headline || "").trim()).slice(0, 8);
+  if (!scenes.length) throw new Error("אין סצנות לסרטון");
+  const [W, H] = VIDEO_SIZES[o.size] || VIDEO_SIZES.story;
+  const bgMode = o.background || "graphic";
+  if (bgMode === "photo" && !o.photos?.length) throw new Error("אין תמונות לרקע");
+  if (bgMode === "clip" && !o.clip) throw new Error("אין סרטון לרקע");
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "ad-video-"));
+  try {
+    // 1. קריינות: קובעת את האורך של כל סצנה
+    const durs = [];
+    for (let i = 0; i < scenes.length; i++) {
+      const s = scenes[i];
+      let wav = null;
+      if (o.voice && o.voice !== "none") {
+        const say = s.voice_text || [s.headline, s.sub].filter(Boolean).join(". ");
+        wav = await narrationWav(say, o.voice).catch((e) => (console.log(`⚠️ קריינות לסצנה ${i + 1} נכשלה: ${e.message}`), null));
+      }
+      const spoken = wav ? (wav.length - 44) / 96000 : 0;
+      if (wav) fs.writeFileSync(path.join(tmp, `v${i}.wav`), wav);
+      durs.push(Math.min(14, Math.max(Number(s.seconds) || 3, wav ? spoken + 0.9 : 0)));
+    }
+    const total = durs.reduce((a, b) => a + b, 0) - (scenes.length - 1) * T;
+
+    // 2. רקע: גרפי (נוצר פעם אחת, גדול יותר בשביל תנועת זום), תמונות, או סרטון שמנורמל לגודל
+    const big = [Math.round(W * 1.5), Math.round(H * 1.5)];
+    const base = { style: o.style, phone: o.phone, brand: o.brand };
+    if (bgMode === "graphic") fs.writeFileSync(path.join(tmp, "bg.png"), renderAd({ ...base, headline: "x", dims: big, layer: "bg" }));
+    if (bgMode === "clip") {
+      await ffmpeg(["-stream_loop", "-1", "-i", o.clip, "-t", String(total + 2), "-an",
+        "-vf", `scale=${W}:${H}:force_original_aspect_ratio=increase,crop=${W}:${H},fps=${FPS},setsar=1`,
+        "-c:v", "libx264", "-preset", "ultrafast", "-crf", "18", "-pix_fmt", "yuv420p", path.join(tmp, "clip.mp4")]);
+    }
+
+    // 3. כל סצנה: רקע בתנועה + כותרת שנכנסת מלמטה + שאר הטקסט חצי שנייה אחריה
+    let start = 0;
+    const starts = [];
+    for (let i = 0; i < scenes.length; i++) {
+      const d = durs[i];
+      const frames = Math.round(d * FPS);
+      starts.push(start);
+      const layer = (l) => renderAd({ ...base, ...scenes[i], phone: i === scenes.length - 1 ? o.phone : "", dims: [W, H], layer: l, center: true, shade: bgMode !== "graphic" });
+      fs.writeFileSync(path.join(tmp, `a${i}.png`), layer("a"));
+      fs.writeFileSync(path.join(tmp, `b${i}.png`), layer("b"));
+      const zoom = i % 2 ? `1.12-0.12*on/${frames}` : `1+0.12*on/${frames}`;
+      const zp = `zoompan=z='${zoom}':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=${frames}:s=${W}x${H}:fps=${FPS}`;
+      let bgIn;
+      let bgF;
+      if (bgMode === "clip") {
+        bgIn = ["-ss", String(start), "-t", String(d), "-i", path.join(tmp, "clip.mp4")];
+        bgF = `[0:v]setpts=PTS-STARTPTS,fps=${FPS}[bg]`;
+      } else {
+        const img = bgMode === "photo" ? o.photos[i % o.photos.length] : path.join(tmp, "bg.png");
+        bgIn = ["-i", img];
+        bgF = `[0:v]scale=${big[0]}:${big[1]}:force_original_aspect_ratio=increase,crop=${big[0]}:${big[1]},setsar=1,${zp}[bg]`;
+      }
+      const slide = Math.round(50 * (W / 720));
+      const filter = [
+        bgF,
+        `[1:v]format=rgba,fade=t=in:st=0.2:d=0.5:alpha=1[a]`,
+        `[2:v]format=rgba,fade=t=in:st=0.75:d=0.5:alpha=1[b]`,
+        `[bg][a]overlay=x=0:y='${slide}*max(0,min(1,1-(t-0.2)/0.5))':eval=frame[x]`,
+        `[x][b]overlay=x=0:y='${slide}*max(0,min(1,1-(t-0.75)/0.5))':eval=frame,format=yuv420p[v]`,
+      ].join(";");
+      await ffmpeg([
+        ...bgIn,
+        "-loop", "1", "-framerate", String(FPS), "-t", String(d), "-i", path.join(tmp, `a${i}.png`),
+        "-loop", "1", "-framerate", String(FPS), "-t", String(d), "-i", path.join(tmp, `b${i}.png`),
+        "-filter_complex", filter, "-map", "[v]", "-frames:v", String(frames),
+        "-c:v", "libx264", "-preset", "ultrafast", "-crf", "18", "-r", String(FPS), path.join(tmp, `s${i}.mp4`),
+      ]);
+      start += d - T;
+    }
+
+    // 4. חיבור הסצנות עם מעברים, ועליהן קריינות ומוזיקה
+    const inputs = [];
+    const f = [];
+    scenes.forEach((_, i) => {
+      inputs.push("-i", path.join(tmp, `s${i}.mp4`));
+      f.push(`[${i}:v]settb=AVTB,fps=${FPS},format=yuv420p[v${i}]`);
+    });
+    let last = "v0";
+    for (let i = 1; i < scenes.length; i++) {
+      const tr = TRANSITIONS[(i - 1) % TRANSITIONS.length];
+      f.push(`[${last}][v${i}]xfade=transition=${tr}:duration=${T}:offset=${starts[i].toFixed(3)}[x${i}]`);
+      last = `x${i}`;
+    }
+    const audio = [];
+    let idx = scenes.length;
+    scenes.forEach((_, i) => {
+      const wav = path.join(tmp, `v${i}.wav`);
+      if (!fs.existsSync(wav)) return;
+      inputs.push("-i", wav);
+      const ms = Math.round((starts[i] + 0.3) * 1000);
+      f.push(`[${idx}:a]adelay=${ms}:all=1[n${i}]`);
+      audio.push(`[n${i}]`);
+      idx++;
+    });
+    const music = MUSIC.includes(o.music) ? o.music : "none";
+    if (music !== "none") {
+      inputs.push("-f", "lavfi", "-t", String(total), "-i", `aevalsrc='${musicExpr(music)}':s=48000`);
+      f.push(`[${idx}:a]volume=${audio.length ? 0.35 : 0.8},afade=t=in:d=0.6,afade=t=out:st=${Math.max(0, total - 1.2).toFixed(2)}:d=1.2[m]`);
+      audio.push("[m]");
+      idx++;
+    }
+    if (!audio.length) {
+      inputs.push("-f", "lavfi", "-t", String(total), "-i", "anullsrc=r=48000:cl=mono");
+      audio.push(`[${idx}:a]`);
+    }
+    f.push(`${audio.join("")}amix=inputs=${audio.length}:normalize=0:duration=longest,apad,atrim=0:${total.toFixed(3)},alimiter=limit=0.95[a]`);
+    const out = path.join(tmp, "out.mp4");
+    await ffmpeg([
+      ...inputs,
+      "-filter_complex", f.join(";"), "-map", `[${last}]`, "-map", "[a]",
+      "-t", total.toFixed(3),
+      "-c:v", "libx264", "-preset", "veryfast", "-crf", "24", "-pix_fmt", "yuv420p",
+      "-c:a", "aac", "-b:a", "128k", "-ac", "2", "-movflags", "+faststart", out,
+    ]);
+    return { mp4: fs.readFileSync(out), seconds: Math.round(total) };
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+// ---------- תמונות וסרטונים שהבעלים שלח: נשמרים כדי לשמש רקע לסרטונים ---------
+const MEDIA_DIR = path.join(DATA_DIR, "media");
+const KEEP_HOURS = 48;
+
+export function saveOwnerMedia(buf, kind, mime = "") {
+  fs.mkdirSync(MEDIA_DIR, { recursive: true });
+  const ext = kind === "clip" ? (/quicktime/.test(mime) ? "mov" : /3gpp/.test(mime) ? "3gp" : "mp4") : /png/.test(mime) ? "png" : /webp/.test(mime) ? "webp" : "jpg";
+  const file = path.join(MEDIA_DIR, `${kind}-${Date.now()}.${ext}`);
+  fs.writeFileSync(file, buf);
+  // ניקוי: מוחקים מה שישן מ-48 שעות
+  for (const f of fs.readdirSync(MEDIA_DIR)) {
+    const p = path.join(MEDIA_DIR, f);
+    try { if (Date.now() - fs.statSync(p).mtimeMs > KEEP_HOURS * 3600_000) fs.rmSync(p); } catch {}
+  }
+  return file;
+}
+
+// הקבצים האחרונים מסוג מסוים (מהישן לחדש), רק מ-48 השעות האחרונות
+export function recentOwnerMedia(kind, max = 6) {
+  if (!fs.existsSync(MEDIA_DIR)) return [];
+  return fs
+    .readdirSync(MEDIA_DIR)
+    .filter((f) => f.startsWith(`${kind}-`))
+    .map((f) => ({ p: path.join(MEDIA_DIR, f), t: Number(f.split("-")[1].split(".")[0]) }))
+    .filter((x) => Date.now() - x.t < KEEP_HOURS * 3600_000)
+    .sort((a, b) => a.t - b.t)
+    .slice(-max)
+    .map((x) => x.p);
+}

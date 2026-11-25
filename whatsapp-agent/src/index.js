@@ -19,7 +19,8 @@ import fs from "node:fs";
 import { OPENING, getApiKey, getGeminiKey, runAgent } from "./agent.js";
 import * as lab from "./lab.js";
 import { DATA_DIR, appendHistory, chats, clearHistory, convo, logMessage, memory, reminders, saveReminders, saveSettings, settings } from "./store.js";
-import { auditLog, findChat, pendingChanges, phoneToJid, replyAppendix, replyImages } from "./tools.js";
+import { auditLog, findChat, pendingChanges, phoneToJid, quiz, replyAppendix, replyImages } from "./tools.js";
+import { saveOwnerMedia } from "./video.js";
 import * as cloud from "./cloud.js";
 import { CHAT_HTML, MANIFEST, SW_JS } from "./chat-page.js";
 import { synthesize } from "./voice.js";
@@ -333,6 +334,11 @@ async function ownerReply(text, images, isVoice, { voice = false } = {}) {
   if (isVoice) return "🎤 עדיין אין לי אפשרות לשמוע הודעות קוליות. אפשר להקליד, או להשתמש בהכתבה של המקלדת (המיקרופון במקלדת).";
   text = text || "";
   if (!text && !images.length) return null;
+  // תמונות שהבעלים שולח נשמרות ל-48 שעות, כדי שאפשר יהיה להשתמש בהן כרקע לסרטון
+  if (images.length) {
+    for (const img of images) try { saveOwnerMedia(Buffer.from(img.data, "base64"), "photo", img.media_type); } catch {}
+    text += "\n(מערכת: התמונה נשמרה. אם הבעלים ביקש סרטון, אפשר להשתמש בה כרקע: make_video עם background=photo)";
+  }
   const confirm = pendingChanges.length ? await handleConfirmation(text) : null;
   if (confirm) return confirm;
   const quick = text.startsWith("!") ? await handleCommand(text) : null;
@@ -368,13 +374,77 @@ async function handleOwner(text, images, isVoice, replyJid = selfJid) {
   await sendReplyImages();
 }
 
-// מודעות שהיועצת עיצבה: נשלחות כתמונות לבעלים בווטסאפ
+// מודעות וסרטונים שהיועצת יצרה: נשלחים לבעלים בווטסאפ. אחריהם, אם הכינה שאלון בחירה, השאלה הראשונה
 async function sendReplyImages() {
   const imgs = replyImages.splice(0);
-  if (!imgs.length || !cloud.cloudEnabled()) return;
-  for (const im of imgs) {
-    await cloud.cloudSendImage(ownerChat().split("@")[0], im.png, im.caption).catch((e) => logger.error(e, "send ad image"));
+  if (cloud.cloudEnabled()) {
+    for (const im of imgs) {
+      const to = ownerChat().split("@")[0];
+      if (im.kind === "video") await cloud.cloudSendVideo(to, im.buf, im.caption).catch((e) => logger.error(e, "send video"));
+      else await cloud.cloudSendImage(to, im.png, im.caption).catch((e) => logger.error(e, "send ad image"));
+    }
   }
+  if (quiz.pending && !quiz.pending.sent) await sendQuizStep();
+}
+
+// ---------- שאלון בחירה: שאלה אחרי שאלה עם כפתורים, בלי לחכות למוח בין שאלה לשאלה ----------
+const quizPrefix = () => `q${quiz.pending.at.toString(36)}_${quiz.pending.step}_`;
+async function sendQuizStep() {
+  const q = quiz.pending;
+  if (!q) return;
+  q.sent = true;
+  q.fresh = false;
+  const cur = q.questions[q.step];
+  const body = `${q.step === 0 && q.intro ? `${q.intro}\n\n` : ""}${cur.question}\n\n(אפשר גם לכתוב תשובה משלך, או "בטל")`;
+  try {
+    await cloud.cloudSendChoice(ownerChat().split("@")[0], {
+      header: q.questions.length > 1 ? `שאלה ${q.step + 1} מתוך ${q.questions.length}` : "",
+      body,
+      options: cur.options,
+      idPrefix: quizPrefix(),
+    });
+  } catch (e) {
+    // אם ווטסאפ לא קיבל את הכפתורים, שולחים את כל השאלות כטקסט ממוספר והבעלים עונה בהודעה רגילה
+    logger.error(e, "quiz send failed");
+    const all = q.questions.map((x, i) => `${i + 1}. ${x.question}\n${x.options.map((o, j) => `   ${j + 1}) ${o.title}`).join("\n")}`).join("\n\n");
+    quiz.pending = null;
+    await sendText(ownerChat(), `${q.intro ? `${q.intro}\n\n` : ""}${all}\n\nענה במספרים, למשל: 1-2, 2-1`).catch(() => {});
+  }
+}
+
+// מחזיר true אם ההודעה טופלה כתשובה לשאלון
+async function handleQuizAnswer(m) {
+  const q = quiz.pending;
+  if (!q?.sent) return false;
+  if (Date.now() - q.at > 6 * 3600_000) { quiz.pending = null; return false; }
+  const id = cloud.choiceId(m);
+  const typed = (m.text?.body || "").trim();
+  if (/^(בטל|ביטול|עצור|תבטלי)$/.test(typed)) {
+    quiz.pending = null;
+    await sendText(ownerChat(), "בוטל 👍").catch(() => {});
+    return true;
+  }
+  let answer = "";
+  if (id.startsWith(quizPrefix())) {
+    const opt = q.questions[q.step].options[Number(id.slice(quizPrefix().length))];
+    answer = opt ? opt.title + (opt.description ? ` (${opt.description})` : "") : "";
+  } else if (id.startsWith("q")) {
+    return true; // לחיצה על כפתור של שאלה קודמת: מתעלמים
+  } else if (typed) {
+    answer = typed;
+  }
+  if (!answer) return false; // תמונה או סרטון באמצע: ממשיכים כרגיל
+  q.answers.push(answer);
+  logMessage(ownerChat(), "owner", `☑️ ${answer}`);
+  q.step++;
+  if (q.step < q.questions.length) {
+    await sendQuizStep();
+    return true;
+  }
+  quiz.pending = null;
+  const summary = `[תשובות לשאלון ששלחת]\n${q.questions.map((x, i) => `${x.question}: ${q.answers[i]}`).join("\n")}\nתמשיכי לפי הבחירות שלי.`;
+  await handleOwner(summary, [], false, ownerChat());
+  return true;
 }
 
 // ---------- ווטסאפ רשמי: הודעות נכנסות מ-Meta ----------
@@ -403,6 +473,18 @@ async function handleCloudOwnerMessage(m) {
   settings.lastOwnerMsg = Number(m.timestamp) * 1000 || Date.now();
   saveSettings();
   if (m.type === "audio") return handleOwnerVoice(m);
+  if (await handleQuizAnswer(m)) return;
+  if (m.type === "video") {
+    // סרטון מהבעלים: נשמר ל-48 שעות, כדי שהיועצת תוכל לבנות ממנו סרטון שיווקי
+    try {
+      const { buf, mime } = await cloud.downloadMedia(m.video?.id, m.video?.url);
+      saveOwnerMedia(buf, "clip", mime || m.video?.mime_type);
+    } catch (e) {
+      logger.error(e, "video download failed");
+      return sendText(ownerChat(), `🎬 לא הצלחתי להוריד את הסרטון (${e.message}). אפשר לנסות סרטון קצר יותר (עד 16MB).`).catch(() => {});
+    }
+    return handleOwner(`${m.video?.caption || "[שלחתי סרטון]"}\n(מערכת: הסרטון נשמר. אפשר להשתמש בו כרקע לסרטון שיווקי: make_video עם background=clip)`, [], false, ownerChat());
+  }
   const text = m.text?.body || cloud.buttonText(m) || m.image?.caption || "";
   const images = m.type === "image" ? [await cloud.downloadImage(m.image.id, m.image.url).catch(() => null)].filter(Boolean) : [];
   await handleOwner(text, images, false);
@@ -836,9 +918,11 @@ http
           : [];
       const reply = (await ownerReply(String(body.text || "").slice(0, 4000), images, false)) || "";
       const hadImages = replyImages.length;
+      const hadQuiz = Boolean(quiz.pending && !quiz.pending.sent);
       await sendReplyImages();
+      const notes = [hadImages ? `🖼️ ${hadImages} קבצים (תמונות/סרטון) נשלחו אליך בווטסאפ.` : "", hadQuiz ? "☑️ השאלות לבחירה נשלחו אליך בווטסאפ, עם כפתורים." : ""].filter(Boolean).join("\n");
       res.writeHead(200, { "Content-Type": "application/json" });
-      return res.end(JSON.stringify({ reply: hadImages ? `${reply}\n\n🖼️ ${hadImages} תמונות נשלחו אליך בווטסאפ.` : reply }));
+      return res.end(JSON.stringify({ reply: notes ? `${reply}\n\n${notes}` : reply }));
     }
     // ---------- קיצור Apple Shortcuts ("עוזר יעקב"): הוראה בעברית -> פעולה באייפון ----------
     if (url.pathname === "/shortcut" && req.method === "POST") {

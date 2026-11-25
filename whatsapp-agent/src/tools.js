@@ -7,6 +7,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { DATA_DIR } from "./store.js";
 import { renderAd, STYLES, SIZES } from "./creative.js";
+import { makeVideo, recentOwnerMedia, VIDEO_SIZES, MUSIC } from "./video.js";
+import { cloudEnabled } from "./cloud.js";
 import { CHECKLIST_TOOL, updateItem } from "./checklist.js";
 
 // שינויי מלאי שממתינים לאישור הבעלים ("כן"). מבוצעים רק ב-index.js, לא על ידי המודל.
@@ -15,6 +17,8 @@ export const pendingChanges = [];
 export const replyAppendix = [];
 // תמונות שהיועצת עיצבה בתור הזה (מודעות). נשלחות לבעלים בווטסאפ אחרי התשובה
 export const replyImages = [];
+// שאלון בחירה שהיועצת הכינה: נשלח לבעלים שאלה אחרי שאלה עם כפתורים, ובסוף כל התשובות חוזרות אליה בהודעה אחת
+export const quiz = { pending: null };
 
 // ---------- בקרה על שינויים במערכת ----------
 // כל שינוי נבדק מול המערכת אחרי הביצוע, נרשם ביומן, והבעלים מקבל את מה שבאמת נכנס (לא מה שהמודל אומר)
@@ -213,8 +217,61 @@ const CREATIVE_TOOLS = [
   },
 ];
 
+const choiceOption = strict({
+  title: { type: "string", description: "האפשרות, עד 24 תווים" },
+  description: { type: "string", description: "הסבר קצר עד 70 תווים, או ריק" },
+});
+const VIDEO_TOOLS = [
+  {
+    name: "ask_choices",
+    description:
+      "שולח לבעלים בווטסאפ שאלון בחירה: שאלה אחרי שאלה, כל אחת עם כפתורים או רשימה לבחירה (עד 10 אפשרויות). כשהוא מסיים, כל התשובות חוזרות אלייך בהודעה אחת. השתמשי בזה לפני סרטון (קונספט, סגנון, מי מופיע, קול, מוזיקה, פורמט, אורך) או בכל מקום שבו בחירה מהירה עדיפה על הקלדה. הבעלים יכול גם להקליד תשובה משלו.",
+    strict: true,
+    input_schema: strict({
+      intro: { type: "string", description: "משפט פתיחה קצר לפני השאלה הראשונה" },
+      questions: {
+        type: "array",
+        description: "1 עד 7 שאלות, לפי הסדר",
+        items: strict({
+          question: { type: "string", description: "השאלה, קצרה" },
+          options: { type: "array", description: "2 עד 10 אפשרויות", items: choiceOption },
+        }),
+      },
+    }),
+  },
+  {
+    name: "make_video",
+    description:
+      "יוצר סרטון שיווקי (MP4) ושולח אותו לבעלים בווטסאפ. כל סצנה היא מסך עם כותרת שנכנסת באנימציה, משפט, מחיר וכפתור, עם קריינות בעברית, מוזיקת רקע ומעברים. רקע: graphic (עיצוב בסגנון שנבחר), photo (התמונות האחרונות שהבעלים שלח, אחת לכל סצנה), clip (הסרטון האחרון שהבעלים צילם, למשל הוא עצמו במעבדה). קריינות: female (הילה), male (אברי), none. מוזיקה: calm, energetic, none. גדלים: story (סטורי/ריל/טיקטוק/סטטוס), square (פוסט), wide (יוטיוב/פייסבוק). 3 עד 6 סצנות, כל אחת 2-5 שניות.",
+    strict: true,
+    input_schema: strict({
+      scenes: {
+        type: "array",
+        description: "הסצנות לפי הסדר. הראשונה: וו שעוצר גלילה. האחרונה: קריאה לפעולה (cta)",
+        items: strict({
+          headline: { type: "string", description: "כותרת הסצנה, עד 6 מילים" },
+          sub: { type: "string", description: "משפט קצר, או ריק" },
+          price: { type: "string", description: "מחיר או הצעה, או ריק" },
+          cta: { type: "string", description: "כפתור קריאה לפעולה, בדרך כלל רק בסצנה האחרונה, אחרת ריק" },
+          badge: { type: "string", description: "תגית קטנה, או ריק" },
+          voice_text: { type: "string", description: "מה הקריינית אומרת בסצנה (משפט אחד או שניים, טבעי). ריק = קוראת את הכותרת והמשפט" },
+          seconds: { type: "number", description: "משך מינימלי בשניות (2-5). הקריינות מאריכה לפי הצורך" },
+        }),
+      },
+      style: { type: "string", enum: Object.keys(STYLES) },
+      size: { type: "string", enum: Object.keys(VIDEO_SIZES) },
+      voice: { type: "string", enum: ["female", "male", "none"] },
+      music: { type: "string", enum: MUSIC },
+      background: { type: "string", enum: ["graphic", "photo", "clip"] },
+      phone: { type: "string", description: "טלפון לסצנה האחרונה, רק אם הבעלים נתן. אחרת ריק" },
+      caption: { type: "string", description: "טקסט קצר שיצורף לסרטון בווטסאפ" },
+    }),
+  },
+];
+
 export const OWNER_TOOLS = [
   ...CREATIVE_TOOLS,
+  ...VIDEO_TOOLS,
   {
     name: "remember",
     description:
@@ -374,6 +431,44 @@ export async function runTool(name, input, ctx) {
       fs.writeFileSync(file, png);
       replyImages.push({ png, caption: `${input.headline}${input.price ? ` | ${input.price}` : ""}` });
       return `התמונה עוצבה (${input.style}, ${input.size}) ותישלח לבעלים בווטסאפ מיד אחרי התשובה שלך. אל תתאר אותה באריכות, רק שורה אחת על הרעיון, ואם יש, את טקסט הפוסט שילווה אותה.`;
+    }
+
+    case "ask_choices": {
+      if (!cloudEnabled()) return "אין חיבור לווטסאפ הרשמי, אז אי אפשר לשלוח כפתורים. כתבי את השאלות בתשובה כרשימה ממוספרת עם אפשרויות ממוספרות, והבעלים יענה במספרים.";
+      if (quiz.pending?.fresh) return "השאלון כבר מוכן ויישלח מיד אחרי התשובה.";
+      const questions = (input.questions || [])
+        .slice(0, 7)
+        .map((q) => ({
+          question: String(q.question || "").trim(),
+          options: (q.options || []).slice(0, 10).map((o) => (typeof o === "string" ? { title: o, description: "" } : { title: String(o.title || "").trim(), description: String(o.description || "").trim() })).filter((o) => o.title),
+        }))
+        .filter((q) => q.question && q.options.length >= 2);
+      if (!questions.length) return "לא נמצאו שאלות תקינות (צריך שאלה ולפחות 2 אפשרויות).";
+      quiz.pending = { intro: String(input.intro || ""), questions, answers: [], step: 0, at: Date.now(), fresh: true, sent: false };
+      return `השאלון (${questions.length} שאלות) יישלח לבעלים בווטסאפ עם כפתורים מיד אחרי התשובה שלך. בתשובה עצמה כתבי רק משפט קצר, בלי לחזור על השאלות. כשהוא יסיים תקבלי את כל התשובות בהודעה אחת, ואז תמשיכי (למשל make_video).`;
+    }
+
+    case "make_video": {
+      if (replyImages.some((x) => x.kind === "video")) return "סרטון כבר נוצר בתשובה הזו ויישלח לבעלים.";
+      let photos = [];
+      let clip = "";
+      if (input.background === "photo") {
+        photos = recentOwnerMedia("photo");
+        if (!photos.length) return "אין תמונות מהבעלים מ-48 השעות האחרונות. בקשי ממנו לשלוח 1-6 תמונות (של המעבדה, של מכשירים או שלו), ואז תיצרי את הסרטון. או הציעי רקע גרפי.";
+      }
+      if (input.background === "clip") {
+        clip = recentOwnerMedia("clip", 1)[0] || "";
+        if (!clip) return "אין סרטון מהבעלים מ-48 השעות האחרונות. בקשי ממנו לצלם ולשלוח סרטון קצר (5-30 שניות), למשל הוא במעבדה מתקן מכשיר, ואז תיצרי את הסרטון. או הציעי רקע גרפי.";
+      }
+      const t0 = Date.now();
+      const { mp4, seconds } = await makeVideo({ ...input, photos, clip });
+      if (mp4.length > 15.5 * 1024 * 1024) return "הסרטון יצא גדול מדי לווטסאפ. נסי פחות סצנות או גודל square.";
+      const dir = path.join(DATA_DIR, "creatives");
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(path.join(dir, `video-${Date.now()}-${input.style}-${input.size}.mp4`), mp4);
+      replyImages.push({ kind: "video", buf: mp4, caption: input.caption || input.scenes?.[0]?.headline || "" });
+      console.log(`🎬 סרטון נוצר: ${seconds} שניות, ${input.style}/${input.size}/${input.voice}/${input.music}/${input.background}, ${Math.round((Date.now() - t0) / 1000)} שניות רינדור`);
+      return `הסרטון נוצר (${seconds} שניות) ויישלח לבעלים בווטסאפ מיד אחרי התשובה שלך. בתשובה: שורה אחת על הסרטון, טקסט לפוסט עם 5 האשטגים, ושאלה אם לשנות משהו (קול, מוזיקה, סגנון, טקסט).`;
     }
 
     case "show_inventory_list": {

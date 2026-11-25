@@ -33,11 +33,11 @@ function collect(stream, ms) {
   });
 }
 
-async function edgeTTS(text) {
+async function edgeTTS(text, voice = VOICE) {
   const tts = new MsEdgeTTS();
   try {
     // OGG ישיר נחסם אצל Microsoft, לכן WebM עם Opus, ואז העברה ל-OGG בלי קידוד מחדש
-    await tts.setMetadata(VOICE, OUTPUT_FORMAT.WEBM_24KHZ_16BIT_MONO_OPUS);
+    await tts.setMetadata(voice, OUTPUT_FORMAT.WEBM_24KHZ_16BIT_MONO_OPUS);
     const { audioStream } = tts.toStream(text);
     const buf = await collect(audioStream, 60000);
     if (buf.length < 1000) throw new Error("הקריינות החזירה קובץ ריק");
@@ -65,6 +65,42 @@ async function googleTTS(text) {
     bufs.push(Buffer.from(await r.arrayBuffer()));
   }
   return { buf: Buffer.concat(bufs), ext: "mp3" };
+}
+
+// ממיר כל קובץ קול ל-WAV (48kHz מונו), בשביל סרטונים. משך = (גודל - 44) / 96000 שניות
+export function toWav(input, ext) {
+  return new Promise((resolve, reject) => {
+    const p = spawn(ffmpegPath, ["-hide_banner", "-loglevel", "error", "-f", ext, "-i", "pipe:0", "-vn", "-ac", "1", "-ar", "48000", "-c:a", "pcm_s16le", "-f", "wav", "pipe:1"]);
+    const out = [];
+    let err = "";
+    const t = setTimeout(() => { p.kill("SIGKILL"); reject(new Error("ההמרה של הקול לקחה יותר מדי זמן")); }, 30000);
+    p.stdout.on("data", (c) => out.push(c));
+    p.stderr.on("data", (c) => (err += c));
+    p.on("error", (e) => { clearTimeout(t); reject(e); });
+    p.on("close", (code) => {
+      clearTimeout(t);
+      const buf = Buffer.concat(out);
+      if (code === 0 && buf.length > 1000) resolve(buf);
+      else reject(new Error(`ההמרה של הקול נכשלה: ${err.slice(0, 200)}`));
+    });
+    p.stdin.on("error", () => {});
+    p.stdin.end(input);
+  });
+}
+
+// קריינות לסרטון: WAV בקול שנבחר (אישה: הילה, גבר: אברי)
+export const VOICES = { female: "he-IL-HilaNeural", male: "he-IL-AvriNeural" };
+export async function narrationWav(text, voice = "female") {
+  const clean = speakable(text);
+  if (!clean) return null;
+  let audio;
+  try {
+    audio = await edgeTTS(clean, VOICES[voice] || VOICES.female);
+  } catch (e) {
+    console.log(`⚠️ הקריינות של Microsoft לא זמינה (${e.message}), עובר לגוגל`);
+    audio = await googleTTS(clean);
+  }
+  return toWav(audio.buf, audio.ext);
 }
 
 function toOggOpus(input, ext) {

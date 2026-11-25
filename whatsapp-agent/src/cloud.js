@@ -88,6 +88,30 @@ export async function cloudSendButtons(toPhone, text, buttons) {
   });
 }
 
+// שאלת בחירה: עד 3 אפשרויות קצרות = כפתורים, אחרת רשימה (עד 10). ה-id של כל אפשרות חוזר בלחיצה
+export async function cloudSendChoice(toPhone, { header = "", body, options, idPrefix }) {
+  const opts = options.slice(0, 10);
+  const asButtons = opts.length <= 3 && opts.every((o) => o.title.length <= 20 && !o.description);
+  const interactive = asButtons
+    ? { type: "button", action: { buttons: opts.map((o, i) => ({ type: "reply", reply: { id: `${idPrefix}${i}`, title: o.title.slice(0, 20) } })) } }
+    : {
+        type: "list",
+        action: {
+          button: "לבחירה",
+          sections: [{ title: "אפשרויות", rows: opts.map((o, i) => ({ id: `${idPrefix}${i}`, title: o.title.slice(0, 24), ...(o.description ? { description: o.description.slice(0, 72) } : {}) })) }],
+        },
+      };
+  if (header) interactive.header = { type: "text", text: header.slice(0, 60) };
+  interactive.body = { text: String(body).slice(0, 1024) };
+  await graph(`${cfg.phoneNumberId}/messages`, {
+    method: "POST",
+    body: JSON.stringify({ messaging_product: "whatsapp", to: normPhone(toPhone), type: "interactive", interactive }),
+  });
+}
+
+// המזהה של האפשרות שנלחצה (כפתור או רשימה)
+export const choiceId = (m) => m.interactive?.button_reply?.id || m.interactive?.list_reply?.id || m.button?.payload || "";
+
 // טקסט של לחיצה על כפתור (בפורמט של Meta)
 export const buttonText = (m) => m.interactive?.button_reply?.title || m.interactive?.list_reply?.title || m.button?.text || "";
 
@@ -152,6 +176,38 @@ export async function cloudSendImage(toPhone, pngBuf, caption = "") {
   });
 }
 
+// הורדת מדיה כללית (סרטון, תמונה) עד maxBytes. מחזיר { mime, buf }
+export async function downloadMedia(mediaId, directUrl, maxBytes = 16 * 1024 * 1024) {
+  let url = directUrl;
+  let mime = "application/octet-stream";
+  if (!url) {
+    const meta = await graph(mediaId);
+    url = meta.url;
+    mime = meta.mime_type || mime;
+  }
+  const res = await fetch(url, { headers: authHeaders(), signal: AbortSignal.timeout(60000) });
+  if (!res.ok) throw new Error(`לא הצלחתי להוריד את הקובץ (${res.status})`);
+  mime = res.headers.get("content-type")?.split(";")[0] || mime;
+  const buf = Buffer.from(await res.arrayBuffer());
+  if (buf.length > maxBytes) throw new Error("הקובץ גדול מדי");
+  return { mime, buf };
+}
+
+// שליחת סרטון (MP4, עד 16MB)
+export async function cloudSendVideo(toPhone, mp4Buf, caption = "") {
+  const form = new FormData();
+  form.append("messaging_product", "whatsapp");
+  form.append("type", "video/mp4");
+  form.append("file", new Blob([mp4Buf], { type: "video/mp4" }), "video.mp4");
+  const up = await fetch(`${base()}/${cfg.phoneNumberId}/media`, { method: "POST", headers: authHeaders(), body: form, signal: AbortSignal.timeout(120000) });
+  const upData = await up.json().catch(() => ({}));
+  if (!up.ok || !upData.id) throw new Error(upData?.error?.message || `העלאת הסרטון נכשלה (${up.status})`);
+  await graph(`${cfg.phoneNumberId}/messages`, {
+    method: "POST",
+    body: JSON.stringify({ messaging_product: "whatsapp", to: normPhone(toPhone), type: "video", video: { id: upData.id, caption: String(caption).slice(0, 1000) } }),
+  });
+}
+
 export async function cloudSendVoice(toPhone, oggBuf) {
   const form = new FormData();
   form.append("messaging_product", "whatsapp");
@@ -212,6 +268,7 @@ function extractKapso(body) {
     const msg = { id: m.id, from, timestamp: m.timestamp, type: m.type };
     if (m.type === "text") msg.text = { body: m.text?.body || m.kapso?.content || "" };
     if (m.type === "image") msg.image = { id: m.image?.id, caption: m.image?.caption || "", url: m.kapso?.media_url };
+    if (m.type === "video") msg.video = { id: m.video?.id, caption: m.video?.caption || "", url: m.kapso?.media_url, mime_type: m.video?.mime_type };
     if (m.type === "audio") msg.audio = { id: m.audio?.id, url: m.kapso?.media_url, mime_type: m.audio?.mime_type, voice: m.audio?.voice };
     if (m.type === "interactive" || m.type === "button") {
       msg.interactive = m.interactive;
