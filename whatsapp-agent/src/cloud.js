@@ -109,6 +109,30 @@ export async function cloudSendChoice(toPhone, { header = "", body, options, idP
   });
 }
 
+// רשימה עם מזהים משלנו (עד 10 שורות): לחיצה על הכפתור פותחת את הרשימה בתוך ההודעה
+export async function cloudSendList(toPhone, { header = "", body, button, rows }) {
+  const interactive = {
+    type: "list",
+    body: { text: String(body).slice(0, 1024) },
+    action: { button: String(button).slice(0, 20), sections: [{ title: "אפשרויות", rows: rows.slice(0, 10).map((r) => ({ id: r.id, title: r.title.slice(0, 24), ...(r.description ? { description: r.description.slice(0, 72) } : {}) })) }] },
+  };
+  if (header) interactive.header = { type: "text", text: header.slice(0, 60) };
+  await graph(`${cfg.phoneNumberId}/messages`, { method: "POST", body: JSON.stringify({ messaging_product: "whatsapp", to: normPhone(toPhone), type: "interactive", interactive }) });
+}
+
+// כפתורים עם מזהים משלנו (עד 3)
+export async function cloudSendButtonIds(toPhone, body, buttons) {
+  await graph(`${cfg.phoneNumberId}/messages`, {
+    method: "POST",
+    body: JSON.stringify({
+      messaging_product: "whatsapp",
+      to: normPhone(toPhone),
+      type: "interactive",
+      interactive: { type: "button", body: { text: String(body).slice(0, 1024) }, action: { buttons: buttons.slice(0, 3).map((b) => ({ type: "reply", reply: { id: b.id, title: b.title.slice(0, 20) } })) } },
+    }),
+  });
+}
+
 // המזהה של האפשרות שנלחצה (כפתור או רשימה)
 export const choiceId = (m) => m.interactive?.button_reply?.id || m.interactive?.list_reply?.id || m.button?.payload || "";
 

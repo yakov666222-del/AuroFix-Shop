@@ -533,10 +533,10 @@ export async function runTool(name, input, ctx) {
     }
 
     case "preview_voices": {
-      if (!hooks.sendMedia || !hooks.voicesLink) return "אין חיבור לווטסאפ הרשמי.";
-      // הודעה אחת: קישור לדף שבו כל הקולות, עם כפתור השמעה וכפתור בחירה לכל קול
-      await hooks.sendMedia({ kind: "text", caption: `🎙️ תפריט קולות: לחץ על הקישור, תשמע כל קול ב-▶️ ובחר את מה שמתאים:\n${hooks.voicesLink()}` });
-      return `נשלחה לבעלים הודעה אחת עם קישור לתפריט הקולות (${VOICE_MENU.length + 2} קולות). כשהוא לוחץ "בחר", הקול נשמר בזיכרון בנושא "קול מועדף לסרטונים" עם ערך voice מוכן. אם הוא כותב מספר במקום, המספרים: ${VOICE_MENU.map((v, i) => `${i + 1}="g:${v.id}"`).join(", ")}, ${VOICE_MENU.length + 1}="female" (הילה), ${VOICE_MENU.length + 2}="male" (אברי). יש גם "native": הדמות מדברת בעצמה בסרטון.`;
+      if (!hooks.sendVoiceMenu) return "אין חיבור לווטסאפ הרשמי.";
+      // הודעה אחת בווטסאפ עם תפריט: לחיצה על קול שולחת את ההקלטה שלו, ו"זה הקול" שומר אותו
+      await hooks.sendVoiceMenu();
+      return `נשלחה לבעלים הודעה אחת עם תפריט קולות בתוך ווטסאפ (${VOICE_MENU.length + 2} קולות). כשהוא לוחץ "בחר", הקול נשמר בזיכרון בנושא "קול מועדף לסרטונים" עם ערך voice מוכן. אם הוא כותב מספר במקום, המספרים: ${VOICE_MENU.map((v, i) => `${i + 1}="g:${v.id}"`).join(", ")}, ${VOICE_MENU.length + 1}="female" (הילה), ${VOICE_MENU.length + 2}="male" (אברי). יש גם "native": הדמות מדברת בעצמה בסרטון.`;
     }
 
     case "video_status": {

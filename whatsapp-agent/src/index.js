@@ -24,7 +24,7 @@ import { saveOwnerMedia } from "./video.js";
 import { getVideoKey, setVideoBudget, videoBudget } from "./omni.js";
 import * as cloud from "./cloud.js";
 import { CHAT_HTML, MANIFEST, SW_JS } from "./chat-page.js";
-import { synthesize, voiceSampleMp3 } from "./voice.js";
+import { synthesize, voiceSample, voiceSampleMp3 } from "./voice.js";
 import { VOICE_MENU } from "./omni.js";
 import { transcribeAudio } from "./gemini.js";
 import * as push from "./push.js";
@@ -396,6 +396,67 @@ function voiceList() {
   return [...list, { n: list.length + 1, voice: "female", name: "הילה", label: "אישה, Microsoft" }, { n: list.length + 2, voice: "male", name: "אברי", label: "גבר, Microsoft" }];
 }
 
+// ---------- תפריט קולות בתוך ווטסאפ: רשימה בהודעה, לחיצה על קול שולחת את ההקלטה שלו ----------
+const VOICE_PAGE_SIZE = 9; // 9 קולות ועוד שורה של "עוד קולות" (ווטסאפ מגביל ל-10 שורות)
+async function sendVoiceMenu(page = 0) {
+  const all = voiceList();
+  const pageItems = all.slice(page * VOICE_PAGE_SIZE, (page + 1) * VOICE_PAGE_SIZE);
+  const rows = pageItems.map((v) => ({ id: `vm_play_${v.voice}`, title: `${v.n}. ${v.name}`, description: v.label }));
+  const more = all.length > (page + 1) * VOICE_PAGE_SIZE;
+  if (more) rows.push({ id: `vm_page_${page + 1}`, title: "➡️ עוד קולות", description: `קולות ${(page + 1) * VOICE_PAGE_SIZE + 1}-${all.length}` });
+  else if (page > 0) rows.push({ id: "vm_page_0", title: "⬅️ חזרה להתחלה", description: "הקולות הראשונים" });
+  const chosen = memory["קול מועדף לסרטונים"] ? `\nהקול שנבחר עכשיו: ${memory["קול מועדף לסרטונים"].split(",")[0]}` : "";
+  await cloud.cloudSendList(ownerChat().split("@")[0], {
+    header: "🎙️ תפריט קולות",
+    body: `לחץ על הכפתור, בחר קול ותקבל הקלטה שלו.${chosen}`,
+    button: "בחירת קול",
+    rows,
+  });
+}
+hooks.sendVoiceMenu = () => sendVoiceMenu(0);
+
+// הקלטה של קול (נשמרת, כדי שבפעם הבאה תגיע מיד)
+async function voiceSampleOgg(voice) {
+  const dir = path.join(DATA_DIR, "voice-samples");
+  const file = path.join(dir, `${voice.replace(/[^A-Za-z0-9]/g, "_")}.ogg`);
+  if (fs.existsSync(file)) return fs.readFileSync(file);
+  const ogg = await voiceSample(VOICE_SAMPLE_TEXT, voice);
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(file, ogg);
+  return ogg;
+}
+
+// מטפל בלחיצות בתפריט הקולות. מחזיר true אם ההודעה הייתה לחיצה בתפריט
+async function handleVoiceMenu(m) {
+  const id = cloud.choiceId(m);
+  if (!id.startsWith("vm_")) return false;
+  const to = ownerChat().split("@")[0];
+  try {
+    if (id.startsWith("vm_page_")) {
+      await sendVoiceMenu(Number(id.slice(8)) || 0);
+    } else if (id.startsWith("vm_play_")) {
+      const v = voiceList().find((x) => x.voice === id.slice(8));
+      if (!v) return true;
+      await cloud.cloudSendVoice(to, await voiceSampleOgg(v.voice));
+      await cloud.cloudSendButtonIds(to, `🔊 ${v.n}. ${v.name}: ${v.label}`, [
+        { id: `vm_pick_${v.voice}`, title: "✅ זה הקול" },
+        { id: "vm_page_0", title: "🔁 חזרה לתפריט" },
+      ]);
+    } else if (id.startsWith("vm_pick_")) {
+      const v = voiceList().find((x) => x.voice === id.slice(8));
+      if (!v) return true;
+      memory["קול מועדף לסרטונים"] = `${v.name} (${v.label}), voice "${v.voice}". השתמשי בו בסרטונים, אלא אם הבעלים ביקש קול אחר`;
+      saveMemory();
+      logMessage(ownerChat(), "owner", `☑️ בחרתי קול: ${v.name}`);
+      await sendText(ownerChat(), `✅ נשמר: ${v.name} (${v.label}) הוא הקול לסרטונים הבאים.`);
+    }
+  } catch (e) {
+    logger.error(e, "voice menu");
+    await sendText(ownerChat(), `⚠️ לא הצלחתי (${e.message}). נסה שוב.`).catch(() => {});
+  }
+  return true;
+}
+
 // סרטון שמוכן אחרי כמה דקות (תמונות AI): נשלח לבעלים ישירות
 // הכתובת הציבורית של היועצת (נלמדת מהבקשה האחרונה לשרת, או מהגדרה), בשביל קישורים שנשלחים לבעלים
 let publicOrigin = process.env.PUBLIC_URL || settings.publicOrigin || "";
@@ -496,6 +557,9 @@ async function handleCloudOwnerMessage(m) {
   settings.lastOwnerMsg = Number(m.timestamp) * 1000 || Date.now();
   saveSettings();
   if (m.type === "audio") return handleOwnerVoice(m);
+  if (await handleVoiceMenu(m)) return;
+  // "תפריט קולות" או "קולות": התפריט נשלח מיד, בלי לחכות למוח
+  if (/^\s*(תפריט קולות|קולות|תפריט הקולות)\s*[?!.]*\s*$/.test(m.text?.body || "")) return sendVoiceMenu(0).catch((e) => logger.error(e, "voice menu"));
   if (await handleQuizAnswer(m)) return;
   if (m.type === "video") {
     // סרטון מהבעלים: נשמר ל-48 שעות, כדי שהיועצת תוכל לבנות ממנו סרטון שיווקי
