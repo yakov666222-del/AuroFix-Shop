@@ -57,7 +57,10 @@ const replyLog = {}; // jid -> [timestamps]
 const pending = {}; // jid -> { timer, texts: [], images: [] }
 
 // ---------- שליחה ----------
+// כמה הודעות יצאו לווטסאפ (כדי לבדוק אם "שלחתי לך בווטסאפ" באמת קרה)
+let waSent = 0;
 async function sendText(jid, text) {
+  waSent++;
   if (cloud.cloudEnabled()) {
     // ווטסאפ רשמי: שולחים למספר (הבעלים או איש קשר)
     await cloud.cloudSend(jid.split("@")[0], text);
@@ -462,6 +465,7 @@ async function handleVoiceMenu(m) {
 let publicOrigin = process.env.PUBLIC_URL || settings.publicOrigin || "";
 hooks.voicesLink = () => `${publicOrigin}/voices?key=${encodeURIComponent(process.env.QR_PAGE_KEY || "")}`;
 hooks.sendMedia = async (m) => {
+  waSent++;
   if (!cloud.cloudEnabled()) throw new Error("אין ווטסאפ רשמי");
   const to = ownerChat().split("@")[0];
   if (m.kind === "video") await cloud.cloudSendVideo(to, m.buf, m.caption);
@@ -1056,8 +1060,13 @@ http
         body.image && /^image\/(jpeg|png|webp|gif)$/.test(body.image.media_type) && typeof body.image.data === "string"
           ? [{ media_type: body.image.media_type, data: body.image.data }]
           : [];
+      const sentBefore = waSent;
       const reply = (await ownerReply(String(body.text || "").slice(0, 4000), images, false)) || "";
       const hadImages = replyImages.length;
+      // היא כתבה "שלחתי לך בווטסאפ" אבל שום הודעה לא יצאה: שולחים את התשובה עצמה לווטסאפ, כדי שזה יהיה נכון
+      if (cloud.cloudEnabled() && waSent === sentBefore && !hadImages && !(quiz.pending && !quiz.pending.sent) && /(שלחתי|שולחת|תקבל|יגיע).{0,40}(ווטסאפ|וואטסאפ|whatsapp)/i.test(reply)) {
+        await sendText(ownerChat(), reply.replace(/שלחתי (לך |אליך )?(עכשיו )?(הודעה )?(בווטסאפ|לווטסאפ)\.?\s*/g, "")).catch((e) => logger.error(e, "forward web reply"));
+      }
       const hadQuiz = Boolean(quiz.pending && !quiz.pending.sent);
       await sendReplyImages();
       const notes = [hadImages ? `🖼️ ${hadImages} קבצים (תמונות/סרטון) נשלחו אליך בווטסאפ.` : "", hadQuiz ? "☑️ השאלות לבחירה נשלחו אליך בווטסאפ, עם כפתורים." : ""].filter(Boolean).join("\n");
