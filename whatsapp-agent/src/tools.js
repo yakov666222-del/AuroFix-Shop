@@ -9,7 +9,7 @@ import { DATA_DIR } from "./store.js";
 import { renderAd, STYLES, SIZES } from "./creative.js";
 import { makeVideo, recentOwnerMedia, VIDEO_SIZES, MUSIC, aiMinutes } from "./video.js";
 import { generateClip, generateImage, getVideoKey, videoBudget, USD_PER_SECOND, USD_PER_IMAGE, VOICE_MENU } from "./omni.js";
-import { voiceSample } from "./voice.js";
+import { voiceMenuOgg } from "./voice.js";
 import { cloudEnabled } from "./cloud.js";
 import { CHECKLIST_TOOL, updateItem } from "./checklist.js";
 
@@ -540,18 +540,12 @@ export async function runTool(name, input, ctx) {
         { n: VOICE_MENU.length + 1, voice: "female", name: "הילה", label: "אישה, Microsoft" },
         { n: VOICE_MENU.length + 2, voice: "male", name: "אברי", label: "גבר, Microsoft" },
       ].filter((v) => input.gender === "female" ? v.label.startsWith("אישה") : input.gender === "male" ? v.label.startsWith("גבר") : true);
-      const out = [];
-      for (const v of menu) {
-        try {
-          const ogg = await voiceSample(input.text, v.voice);
-          await hooks.sendMedia({ kind: "text", caption: `🔊 ${v.n}. ${v.name}: ${v.label}` });
-          await hooks.sendMedia({ kind: "voice", buf: ogg, caption: `${v.n}. ${v.name}` });
-          out.push(`${v.n}=${v.name} (voice "${v.voice}")`);
-        } catch (e) {
-          out.push(`${v.n}=${v.name} נכשל (${e.message.slice(0, 60)})`);
-        }
-      }
-      return `נשלח לבעלים תפריט קולות, כל אחד עם מספר ודוגמה: ${out.join(", ")}. עכשיו שאלי אותו איזה מספר. ב-make_video העבירי ב-voice את הערך שבסוגריים (למשל "g:Kore" או "female"). יש גם "native": הדמות מדברת בעצמה בסרטון, ואותו אי אפשר לשמוע מראש.`;
+      // הודעה אחת עם הרשימה, והקלטה אחת עם כל הקולות ברצף (לא הודעה לכל קול)
+      await hooks.sendMedia({ kind: "text", caption: `🎙️ תפריט קולות (${menu.length}). בהקלטה הבאה כל קול אומר את אותו משפט, לפי המספרים:\n${menu.map((v) => `${v.n}. ${v.name}: ${v.label}`).join("\n")}` });
+      const ogg = await voiceMenuOgg(menu, input.text);
+      await hooks.sendMedia({ kind: "voice", buf: ogg, caption: "תפריט קולות" });
+      const out = menu.map((v) => `${v.n}=${v.name} (voice "${v.voice}")`);
+      return `נשלחו לבעלים הודעה אחת עם רשימת הקולות והקלטה אחת עם כולם ברצף: ${out.join(", ")}. עכשיו שאלי אותו איזה מספר. ב-make_video העבירי ב-voice את הערך שבסוגריים (למשל "g:Kore" או "female"). יש גם "native": הדמות מדברת בעצמה בסרטון, ואותו אי אפשר לשמוע מראש.`;
     }
 
     case "video_status": {

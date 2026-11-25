@@ -164,3 +164,25 @@ export async function synthesize(text) {
 }
 
 export const __test = { speakable, toOggOpus, googleTTS, edgeTTS };
+
+// תפריט קולות בהודעה קולית אחת: לפני כל קול הילה אומרת "מספר X", ואז הדוגמה, ושקט קצר
+export async function voiceMenuOgg(items, text) {
+  const pcm = [];
+  const silence = Buffer.alloc(Math.round(48000 * 0.5) * 2); // חצי שנייה
+  for (const it of items) {
+    try {
+      const intro = await narrationWav(`מספר ${it.n}`, "female");
+      const sample = await narrationWav(text, it.voice);
+      if (intro) pcm.push(intro.subarray(44), silence.subarray(0, 9600));
+      if (sample) pcm.push(sample.subarray(44), silence);
+    } catch (e) {
+      console.log(`⚠️ דוגמת קול ${it.n} נכשלה: ${e.message}`);
+    }
+  }
+  const data = Buffer.concat(pcm);
+  const h = Buffer.alloc(44);
+  h.write("RIFF", 0); h.writeUInt32LE(36 + data.length, 4); h.write("WAVE", 8); h.write("fmt ", 12);
+  h.writeUInt32LE(16, 16); h.writeUInt16LE(1, 20); h.writeUInt16LE(1, 22); h.writeUInt32LE(48000, 24);
+  h.writeUInt32LE(96000, 28); h.writeUInt16LE(2, 32); h.writeUInt16LE(16, 34); h.write("data", 36); h.writeUInt32LE(data.length, 40);
+  return toOggOpus(Buffer.concat([h, data]), "wav");
+}
