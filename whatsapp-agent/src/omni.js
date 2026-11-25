@@ -94,7 +94,7 @@ export async function generateClip(o) {
       model: OMNI_MODEL,
       input,
       response_format: { type: "video", aspect_ratio: o.aspect || "9:16", duration: `${seconds}s`, resolution: "720p", delivery: "uri" },
-      store: false,
+      store: true, // חובה כשהסרטון חוזר כקישור (delivery: uri)
       background: false,
       stream: false,
     },
