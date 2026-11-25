@@ -23,6 +23,9 @@ export const quiz = { pending: null };
 // שליחת מדיה לבעלים מחוץ לתשובה (סרטון שמוכן אחרי כמה דקות). index.js ממלא את זה
 export const hooks = { sendMedia: null };
 let videoBusy = false;
+// מצב אמיתי של הסרטון שבעבודה, כדי שהיועצת תדווח מה באמת קורה ולא תנחש
+const videoJob = { stage: "", at: 0, started: 0, cost: 0, error: "" };
+const setStage = (stage, extra = {}) => Object.assign(videoJob, { stage, at: Date.now(), ...extra });
 
 // ---------- בקרה על שינויים במערכת ----------
 // כל שינוי נבדק מול המערכת אחרי הביצוע, נרשם ביומן, והבעלים מקבל את מה שבאמת נכנס (לא מה שהמודל אומר)
@@ -226,6 +229,12 @@ const choiceOption = strict({
   description: { type: "string", description: "הסבר קצר עד 70 תווים, או ריק" },
 });
 const VIDEO_TOOLS = [
+  {
+    name: "video_status",
+    description: "בודק באיזה שלב באמת נמצא הסרטון שבעבודה (אצל גוגל, בעריכה, נשלח, נכשל). חובה להשתמש בזה לפני שעונים לבעלים על שאלה כמו 'מה עם הסרטון' או 'לא קיבלתי'. אסור לכתוב שסרטון נשלח בלי שהכלי הזה אמר שהוא נשלח.",
+    strict: true,
+    input_schema: strict({}),
+  },
   {
     name: "ask_choices",
     description:
@@ -455,6 +464,12 @@ export async function runTool(name, input, ctx) {
       return `השאלון (${questions.length} שאלות) יישלח לבעלים בווטסאפ עם כפתורים מיד אחרי התשובה שלך. בתשובה עצמה כתבי רק משפט קצר, בלי לחזור על השאלות. כשהוא יסיים תקבלי את כל התשובות בהודעה אחת, ואז תמשיכי (למשל make_video).`;
     }
 
+    case "video_status": {
+      if (!videoJob.stage) return "אין סרטון בעבודה כרגע, ולא נוצר סרטון מאז ההפעלה האחרונה של היועצת.";
+      const ago = (t) => `לפני ${Math.max(0, Math.round((Date.now() - t) / 60000))} דקות`;
+      return `מצב הסרטון: ${videoJob.stage} (עודכן ${ago(videoJob.at)}, התחיל ${ago(videoJob.started)})${videoJob.error ? `. הסיבה: ${videoJob.error}` : ""}. דווחי לבעלים בדיוק את זה, בלי להוסיף.`;
+    }
+
     case "make_video": {
       if (replyImages.some((x) => x.kind === "video")) return "סרטון כבר נוצר בתשובה הזו ויישלח לבעלים.";
       let photos = [];
@@ -477,6 +492,7 @@ export async function runTool(name, input, ctx) {
         const cost = 15 * USD_PER_SECOND;
         if (cost > b.left) return `התקציב החודשי לסרטוני AI נגמר (${b.spent} מתוך ${b.budget} דולר, ${b.videos} סרטונים). אמרי לבעלים שאפשר להגדיל אותו בעמוד ההגדרות.`;
         videoBusy = true;
+        setStage("נשלח לגוגל ליצירת הווידאו (לוקח 1-4 דקות)", { started: Date.now(), cost, error: "" });
         const scenes = input.scenes || [];
         const body = scenes.filter((x, i) => !(i === scenes.length - 1 && x.cta));
         const per = body.length ? 15 / body.length : 5;
@@ -490,21 +506,25 @@ export async function runTool(name, input, ctx) {
             fs.mkdirSync(dir, { recursive: true });
             const clipFile = path.join(dir, `omni-${Date.now()}.mp4`);
             fs.writeFileSync(clipFile, clipBuf);
+            setStage("הווידאו התקבל מגוגל. עכשיו מוסיפה כתוביות, קריינות וכרטיס סיום (כדקה)");
             const voice = input.voice === "native" ? "none" : input.voice;
             const { mp4, seconds } = await makeVideo({ ...input, scenes: timed, voice, background: "clip", clip: clipFile, clipAudio: true, music: input.voice === "native" ? "none" : input.music });
             if (mp4.length > 15.5 * 1024 * 1024) throw new Error("הסרטון יצא גדול מדי לווטסאפ");
             fs.writeFileSync(path.join(dir, `video-${Date.now()}-omni-${input.size}.mp4`), mp4);
             const nb = videoBudget();
+            setStage("שולחת את הסרטון לווטסאפ");
             await hooks.sendMedia({ kind: "video", buf: mp4, caption: `${input.caption || "🎬 הסרטון מוכן"}\n(עלות: כ-${cost.toFixed(2)} דולר. החודש: ${nb.spent} מתוך ${nb.budget} דולר)` });
+            setStage("✅ הסרטון נשלח לבעלים בווטסאפ");
             console.log(`🎬 סרטון Omni נוצר ונשלח: ${seconds} שניות, ${Math.round((Date.now() - t0) / 1000)} שניות עבודה`);
           } catch (e) {
             console.log(`⚠️ סרטון Omni נכשל: ${e.message}`);
+            setStage("❌ נכשל", { error: e.message });
             await ctx.notifyOwner?.(`⚠️ לא הצלחתי לסיים את הסרטון: ${e.message}`).catch(() => {});
           } finally {
             videoBusy = false;
           }
         })();
-        return `התחלתי ליצור סרטון AI אמיתי אצל גוגל (עלות כ-${cost.toFixed(2)} דולר, נשארו ${(b.left - cost).toFixed(2)} דולר בתקציב החודש). זה לוקח בערך 2-5 דקות, והסרטון יגיע לבעלים בווטסאפ. אמרי לו את זה במשפט אחד, ותני כבר עכשיו את הטקסט לפוסט עם 5 האשטגים.`;
+        return `הבקשה נשלחה לגוגל. הסרטון עוד לא קיים ועוד לא נשלח: אמרי לבעלים "התחלתי ליצור" ולא "שלחתי". כדי לדעת מה המצב בהמשך, השתמשי ב-video_status. התחלתי ליצור סרטון AI אמיתי אצל גוגל (עלות כ-${cost.toFixed(2)} דולר, נשארו ${(b.left - cost).toFixed(2)} דולר בתקציב החודש). זה לוקח בערך 2-5 דקות, והסרטון יגיע לבעלים בווטסאפ. אמרי לו את זה במשפט אחד, ותני כבר עכשיו את הטקסט לפוסט עם 5 האשטגים.`;
       }
       if (input.background === "ai") {
         // תמונות AI בחינם לוקחות כמה דקות: הסרטון נוצר ברקע ונשלח לבעלים כשהוא מוכן
