@@ -170,7 +170,7 @@ export async function geminiSpeech(text, voice, style = "") {
     timeout: 90_000,
     body: {
       model: TTS_MODEL,
-      input: [{ type: "user_input", content: [{ type: "text", text, annotations: [{ type: "speech_metadata", style: `Native Israeli Hebrew speaker, natural Israeli accent. ${style}`.trim() }] }] }],
+      input: [{ type: "user_input", content: [{ type: "text", text, annotations: [{ type: "speech_metadata", style: `Native Israeli Hebrew speaker, natural Israeli accent. Speak slowly and calmly, at a relaxed pace, with natural pauses between sentences, like a warm TV commercial voice-over. ${style}`.trim() }] }] }],
       response_format: { type: "audio" },
       generation_config: { speech_config: [{ voice }] },
       store: false,

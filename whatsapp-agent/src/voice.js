@@ -105,7 +105,14 @@ async function googleVoice(text, voice) {
 }
 
 // בקולות של גוגל השם נשמע נכון באנגלית: "Yakov Phone" (בעברית הוא יצא עקום)
-const englishName = (t) => t.replace(/יעקב\s*פון|yakov\s*phone/gi, "Yakov Phone");
+// איך לכתוב את השם לקריינות: נקבע לפי מה שהבעלים בחר (קובץ name-say.txt), ברירת מחדל באנגלית
+import fs from "node:fs";
+import path from "node:path";
+import { DATA_DIR } from "./store.js";
+const nameSay = () => {
+  try { return fs.readFileSync(path.join(DATA_DIR, "name-say.txt"), "utf8").trim() || "Yakov Phone"; } catch { return "Yakov Phone"; }
+};
+const englishName = (t) => t.replace(/יעקב\s*פון|yakov\s*phone/gi, nameSay());
 
 export async function narrationWav(text, voice = "female") {
   let clean = speakable(text);
