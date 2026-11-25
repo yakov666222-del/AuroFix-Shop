@@ -36,6 +36,20 @@ const setLastLooks = (v) => {
   lastLooks = v;
   try { fs.writeFileSync(LAST_LOOKS_FILE, JSON.stringify(v)); } catch {}
 };
+// חיבור שני קליפים של גוגל לקליפ אחד (עם הסאונד)
+async function joinClips(files, out) {
+  const { spawn } = await import("node:child_process");
+  const ffmpegPath = (await import("ffmpeg-static")).default;
+  const inputs = files.flatMap((f) => ["-i", f]);
+  const filter = files.map((_, i) => `[${i}:v]fps=30,setsar=1[v${i}];[${i}:a]aresample=48000[a${i}]`).join(";") + ";" + files.map((_, i) => `[v${i}][a${i}]`).join("") + `concat=n=${files.length}:v=1:a=1[v][a]`;
+  await new Promise((resolve, reject) => {
+    const p = spawn(ffmpegPath, ["-hide_banner", "-loglevel", "error", "-y", ...inputs, "-filter_complex", filter, "-map", "[v]", "-map", "[a]", "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-pix_fmt", "yuv420p", "-c:a", "aac", out]);
+    let err = "";
+    p.stderr.on("data", (c) => (err += c));
+    p.on("close", (code) => (code === 0 ? resolve() : reject(new Error(`חיבור הקליפים נכשל: ${err.slice(-200)}`))));
+  });
+}
+
 // הדמות הקבועה שהבעלים אישר (נשמרת בדיסק ובזיכרון)
 const LOOK_DIR = path.join(DATA_DIR, "characters");
 function savedLook() {
@@ -355,6 +369,8 @@ const VIDEO_TOOLS = [
       music: { type: "string", enum: MUSIC },
       background: { type: "string", enum: ["omni", "ai", "photo", "clip", "graphic"] },
       phone: { type: "string", description: "טלפון לסצנה האחרונה, רק אם הבעלים נתן. אחרת ריק" },
+      video_prompt_2: { type: "string", description: "רק ברקע omni עם clips=2: תיאור הקליפ השני (15 שניות נוספות, אותה דמות ואותו סגנון), לפי זמנים [0-3s] ... עד [12-15s]. אחרת ריק" },
+      clips: { type: "integer", description: "רק ברקע omni: 1 = סרטון של 15 שניות (כ-1 דולר), 2 = סרטון מושקע של 30 שניות כמו הסרטון של PowerAds (כ-2.1 דולר)" },
       video_prompt: { type: "string", description: "רק ברקע omni: תיאור מפורט באנגלית של כל הקליפ (15 שניות) לפי זמנים, למשל '[0-5s] ... [5-10s] ... [10-15s] ...'. מי הדמות (מראה מדויק), מה קורה, מצלמה, תאורה, ומה נשמע (מוזיקה, אווירה, בלי דיבור או דיבור בעברית). התזמון תואם לסצנות (חוץ מכרטיס הסיום). אחרת ריק" },
       use_my_photos: { type: "boolean", description: "רק ברקע omni: להשתמש בתמונות האחרונות שהבעלים שלח (למשל המעבדה שלו) כרפרנס, כדי שהסרטון יראה את המקום האמיתי" },
       look_number: { type: "integer", description: "רק ברקע omni: מספר המראה שהבעלים בחר מ-preview_looks (1-6), או 1 לדמות מ-design_look שעוד לא נשמרה. 0 = הדמות השמורה (save_look) אם יש, אחרת בלי רפרנס" },
@@ -653,16 +669,18 @@ export async function runTool(name, input, ctx) {
         if (!hooks.sendMedia) return "אין חיבור לווטסאפ הרשמי, אז אי אפשר לשלוח סרטון.";
         if (!String(input.video_prompt || "").trim()) return "חסר video_prompt: תיאור הקליפ באנגלית לפי זמנים.";
         const b = videoBudget();
-        const cost = 15 * USD_PER_SECOND;
+        const nClips = input.clips === 2 && String(input.video_prompt_2 || "").trim() ? 2 : 1;
+        const cost = 15 * nClips * USD_PER_SECOND;
         if (cost > b.left) return `התקציב החודשי לסרטוני AI נגמר (${b.spent} מתוך ${b.budget} דולר, ${b.videos} סרטונים). אמרי לבעלים שאפשר להגדיל אותו בעמוד ההגדרות.`;
         videoBusy = true;
         const t0start = Date.now();
-        setStage("📝 התסריט מוכן, שולחת לגוגל", { started: t0start, cost, error: "", eta: t0start + 4 * 60_000, title: input.caption || input.scenes?.[0]?.headline || "סרטון", script: (input.scenes || []).map((x) => [x.headline, x.sub].filter(Boolean).join(" / ")) });
+        const etaMin = nClips === 2 ? 6 : 4;
+        setStage("📝 התסריט מוכן, שולחת לגוגל", { started: t0start, cost, error: "", eta: t0start + etaMin * 60_000, title: input.caption || input.scenes?.[0]?.headline || "סרטון", script: (input.scenes || []).map((x) => [x.headline, x.sub].filter(Boolean).join(" / ")) });
         const fmt = (t) => new Date(t).toLocaleTimeString("he-IL", { timeZone: "Asia/Jerusalem", hour: "2-digit", minute: "2-digit" });
-        await hooks.sendMedia({ kind: "text", caption: `🎬 התחלתי ליצור את הסרטון (${fmt(t0start)}).\n⏱️ זמן משוער: כ-4 דקות, יהיה מוכן בערך ב-${fmt(t0start + 4 * 60_000)}.\n👀 לצפייה בתהליך בזמן אמת:\n${hooks.link ? hooks.link("/video") : ""}` }).catch(() => {});
+        await hooks.sendMedia({ kind: "text", caption: `🎬 התחלתי ליצור את הסרטון (${fmt(t0start)}).\n⏱️ זמן משוער: כ-${etaMin} דקות, יהיה מוכן בערך ב-${fmt(t0start + etaMin * 60_000)}.\n👀 לצפייה בתהליך בזמן אמת:\n${hooks.link ? hooks.link("/video") : ""}` }).catch(() => {});
         const scenes = input.scenes || [];
         const body = scenes.filter((x, i) => !(i === scenes.length - 1 && x.cta));
-        const per = body.length ? 15 / body.length : 5;
+        const per = body.length ? (15 * nClips) / body.length : 5;
         const timed = scenes.map((x, i) => (body.includes(x) ? { ...x, seconds: Math.max(Number(x.seconds) || 0, per) } : x));
         (async () => {
           try {
@@ -682,15 +700,27 @@ export async function runTool(name, input, ctx) {
             }
             const prompt = `${input.video_prompt}${refNote}\nNobody says the business name out loud.\nPhotorealistic, natural real people and real places, shot on a professional cinema camera, smooth camera movement. Do not show any on-screen text, subtitles, captions or logos.`;
             setStage("🎥 גוגל מצלם את הווידאו (1-3 דקות)");
-            const clipBuf = await generateClip({ prompt, aspect: input.size === "wide" ? "16:9" : "9:16", seconds: 15, images });
+            const aspect = input.size === "wide" ? "16:9" : "9:16";
             const dir = path.join(DATA_DIR, "creatives");
             fs.mkdirSync(dir, { recursive: true });
-            const clipFile = path.join(dir, `omni-${Date.now()}.mp4`);
+            const clipBuf = await generateClip({ prompt, aspect, seconds: 15, images });
+            let clipFile = path.join(dir, `omni-${Date.now()}.mp4`);
             fs.writeFileSync(clipFile, clipBuf);
+            if (nClips === 2) {
+              videoJob.files = { ...videoJob.files, clip: clipFile };
+              setStage("🎥 הקליפ הראשון מוכן. גוגל מצלם את הקליפ השני (1-3 דקות)");
+              const prompt2 = prompt.replace(input.video_prompt, input.video_prompt_2);
+              const clip2 = path.join(dir, `omni-${Date.now()}-2.mp4`);
+              fs.writeFileSync(clip2, await generateClip({ prompt: prompt2, aspect, seconds: 15, images }));
+              const joined = path.join(dir, `omni-${Date.now()}-joined.mp4`);
+              await joinClips([clipFile, clip2], joined);
+              clipFile = joined;
+            }
             videoJob.files = { ...videoJob.files, clip: clipFile };
             setStage("✂️ הווידאו התקבל מגוגל. מוסיפה כתוביות, קריינות וכרטיס סיום (כדקה)");
             const voice = input.voice === "native" ? "none" : input.voice;
-            const { mp4, seconds } = await makeVideo({ ...input, scenes: timed, voice, background: "clip", clip: clipFile, clipAudio: true, music: input.voice === "native" ? "none" : input.music });
+            const endClip = path.join(REF_DIR, "end-card.mp4");
+            const { mp4, seconds } = await makeVideo({ ...input, scenes: timed, voice, background: "clip", clip: clipFile, clipAudio: true, music: input.voice === "native" ? "none" : input.music, endClip: fs.existsSync(endClip) ? endClip : "", endClipSeconds: 4.9 });
             if (mp4.length > 15.5 * 1024 * 1024) throw new Error("הסרטון יצא גדול מדי לווטסאפ");
             const finalFile = path.join(dir, `video-${Date.now()}-omni-${input.size}.mp4`);
             fs.writeFileSync(finalFile, mp4);

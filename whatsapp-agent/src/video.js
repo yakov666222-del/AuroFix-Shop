@@ -128,7 +128,8 @@ export async function makeVideo(o) {
       }
       const spoken = wav ? (wav.length - 44) / 96000 : 0;
       if (wav) fs.writeFileSync(path.join(tmp, `v${i}.wav`), wav);
-      durs.push(Math.min(14, Math.max(Number(s.seconds) || 3, wav ? spoken + 0.9 : 0)));
+      const isEndClip = o.endClip && i === scenes.length - 1 && (s.cta || s.end);
+      durs.push(Math.min(14, Math.max(isEndClip ? Number(o.endClipSeconds) || 4.9 : 0, Number(s.seconds) || 3, wav ? spoken + 0.9 : 0)));
     }
     const aiImages = await aiJobs;
     const total = durs.reduce((a, b) => a + b, 0) - (scenes.length - 1) * T;
@@ -157,6 +158,17 @@ export async function makeVideo(o) {
       const sc = scenes[i];
       const isLast = i === scenes.length - 1;
       const endCard = cinematic && isLast && (sc.cta || sc.end);
+      // סיום מוכן מראש (הסיום המונפש עם הלוגו מהסרטון המקורי), רק בפורמט לאורך
+      if (endCard && o.endClip && fs.existsSync(o.endClip) && H > W) {
+        const clipLen = Number(o.endClipSeconds) || 4.9;
+        await ffmpeg([
+          "-i", o.endClip, "-an",
+          "-vf", `scale=${W}:${H}:force_original_aspect_ratio=increase,crop=${W}:${H},setsar=1,fps=${FPS},tpad=stop_mode=clone:stop_duration=${Math.max(0, d - clipLen + 0.2).toFixed(2)}`,
+          "-frames:v", String(frames), "-c:v", "libx264", "-preset", "ultrafast", "-crf", "18", "-pix_fmt", "yuv420p", "-r", String(FPS), path.join(tmp, `s${i}.mp4`),
+        ]);
+        start += d - T;
+        continue;
+      }
       const phone = isLast ? o.phone : "";
       let la, lb;
       if (endCard) {

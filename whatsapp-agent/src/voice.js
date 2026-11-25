@@ -104,10 +104,14 @@ async function googleVoice(text, voice) {
   return { buf: r.buf, ext };
 }
 
+// בקולות של גוגל השם נשמע נכון באנגלית: "Yakov Phone" (בעברית הוא יצא עקום)
+const englishName = (t) => t.replace(/יעקב\s*פון|yakov\s*phone/gi, "Yakov Phone");
+
 export async function narrationWav(text, voice = "female") {
-  const clean = speakable(text);
+  let clean = speakable(text);
   if (!clean) return null;
   if (String(voice).startsWith("g:")) {
+    clean = englishName(clean);
     const a = await googleVoice(clean, voice);
     return toWav(a.buf, a.ext);
   }
@@ -145,7 +149,7 @@ function toOggOpus(input, ext) {
 
 /** דוגמת קול לבחירה: OGG בקול מסוים (female/male) */
 export async function voiceSample(text, voice = "female") {
-  const a = String(voice).startsWith("g:") ? await googleVoice(speakable(text), voice) : await edgeTTS(speakable(text), VOICES[voice] || VOICES.female);
+  const a = String(voice).startsWith("g:") ? await googleVoice(englishName(speakable(text)), voice) : await edgeTTS(speakable(text), VOICES[voice] || VOICES.female);
   return toOggOpus(a.buf, a.ext);
 }
 
