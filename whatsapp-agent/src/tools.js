@@ -23,6 +23,9 @@ export const quiz = { pending: null };
 // שליחת מדיה לבעלים מחוץ לתשובה (סרטון שמוכן אחרי כמה דקות). index.js ממלא את זה
 export const hooks = { sendMedia: null };
 let videoBusy = false;
+// תמונות רפרנס של המעבדה (מהסרטון של PowerAds שהבעלים שלח), בלי אנשים, כדי שהסרטונים יראו את המקום והלוגו
+const REF_DIR = path.join(path.dirname(new URL(import.meta.url).pathname), "..", "assets", "brand-refs");
+const LAB_REFS = ["lab-logo-wall.jpg", "repair-bench-macro.jpg", "microscope-ringlight.jpg"];
 // מצב אמיתי של הסרטון שבעבודה, כדי שהיועצת תדווח מה באמת קורה ולא תנחש
 const videoJob = { stage: "", at: 0, started: 0, cost: 0, error: "" };
 const setStage = (stage, extra = {}) => Object.assign(videoJob, { stage, at: Date.now(), ...extra });
@@ -280,6 +283,7 @@ const VIDEO_TOOLS = [
       phone: { type: "string", description: "טלפון לסצנה האחרונה, רק אם הבעלים נתן. אחרת ריק" },
       video_prompt: { type: "string", description: "רק ברקע omni: תיאור מפורט באנגלית של כל הקליפ (15 שניות) לפי זמנים, למשל '[0-5s] ... [5-10s] ... [10-15s] ...'. מי הדמות (מראה מדויק), מה קורה, מצלמה, תאורה, ומה נשמע (מוזיקה, אווירה, בלי דיבור או דיבור בעברית). התזמון תואם לסצנות (חוץ מכרטיס הסיום). אחרת ריק" },
       use_my_photos: { type: "boolean", description: "רק ברקע omni: להשתמש בתמונות האחרונות שהבעלים שלח (למשל המעבדה שלו) כרפרנס, כדי שהסרטון יראה את המקום האמיתי" },
+      use_lab_refs: { type: "boolean", description: "רק ברקע omni: להשתמש בתמונות הרפרנס של המעבדה של YakovPhone (קיר עם הלוגו בזהב, שולחן עבודה עם מנורת טבעת ומיקרוסקופ, תאורה חמה). כמעט תמיד true, חוץ מסרטון שכולו ברחוב או בבית" },
       caption: { type: "string", description: "טקסט קצר שיצורף לסרטון בווטסאפ" },
     }),
   },
@@ -500,7 +504,15 @@ export async function runTool(name, input, ctx) {
         (async () => {
           try {
             const images = input.use_my_photos ? recentOwnerMedia("photo", 3).map((p) => ({ mime: /\.png$/.test(p) ? "image/png" : "image/jpeg", data: fs.readFileSync(p).toString("base64") })) : [];
-            const prompt = `${input.video_prompt}\nPhotorealistic, natural real people and real places, shot on a professional cinema camera, smooth camera movement. Do not show any on-screen text, subtitles, captions or logos.`;
+            let refNote = "";
+            if (input.use_lab_refs !== false) {
+              for (const f of LAB_REFS) {
+                const p = path.join(REF_DIR, f);
+                if (images.length < 6 && fs.existsSync(p)) images.push({ mime: "image/jpeg", data: fs.readFileSync(p).toString("base64") });
+              }
+              refNote = "\nThe reference images show the real YakovPhone repair lab: a dark modern interior, the gold YakovPhone phone-and-lightning logo on the wall, a work bench with a ring light and a microscope, warm gold lighting. Every lab shot must take place in exactly this lab, with this logo and this look.";
+            }
+            const prompt = `${input.video_prompt}${refNote}\nNobody says the business name out loud.\nPhotorealistic, natural real people and real places, shot on a professional cinema camera, smooth camera movement. Do not show any on-screen text, subtitles, captions or logos.`;
             const clipBuf = await generateClip({ prompt, aspect: input.size === "wide" ? "16:9" : "9:16", seconds: 15, images });
             const dir = path.join(DATA_DIR, "creatives");
             fs.mkdirSync(dir, { recursive: true });

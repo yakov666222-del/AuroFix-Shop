@@ -16,6 +16,9 @@ export function speakable(text) {
     .replace(/[*_~`#>|]/g, " ")
     .replace(/\p{Extended_Pictographic}|️|‍/gu, "")
     .replace(/₪/g, " שקל ")
+    // שם העסק באותיות לועזיות יוצא עקום בקריינות: כותבים אותו כמו שאומרים
+    .replace(/yakov\s*phone/gi, "יעקב פון")
+    .replace(/יעקבפון/g, "יעקב פון")
     .replace(/[ \t]+/g, " ")
     .replace(/\n{2,}/g, "\n")
     .trim()
