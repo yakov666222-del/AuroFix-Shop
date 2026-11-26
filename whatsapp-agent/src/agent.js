@@ -274,17 +274,21 @@ function sources(content) {
  * @param {Array} images - [{ media_type, data(base64) }]
  * @param {object} ctx - פונקציות לשליחה (ראה tools.js)
  */
+let geminiDownUntil = 0;
 export async function runAgent(mode, key, text, images, ctx) {
   const isOwner = mode === "owner";
   if (!provider()) throw new Error("עדיין לא הוגדר מפתח. פתח את עמוד ההגדרה והדבק מפתח של Gemini או Claude.");
   // Gemini החינמי הוא המוח הראשי. Claude Haiku (בתשלום) נכנס רק כש-Gemini עמוס, איטי או לא עונה
   if (!claudeKey()) return runViaGemini(isOwner, key, text, images, ctx);
   if (!geminiKey()) return runViaClaude(isOwner, key, text, images, ctx);
+  // גוגל נפל לאחרונה: 10 דקות עונים ישר מ-Claude, בלי לחכות שגוגל ייכשל שוב
+  if (Date.now() < geminiDownUntil) return runViaClaude(isOwner, key, text, images, ctx);
   try {
     setQuickFail(true); // יש גיבוי, אז לא מחכים לסבב ארוך של Gemini
     return await runViaGemini(isOwner, key, text, images, ctx);
   } catch (e) {
-    console.log(`⚠️ Gemini לא ענה (${String(e?.message || e).slice(0, 100)}), עובר ל-Claude Haiku`);
+    console.log(`⚠️ Gemini לא ענה (${String(e?.message || e).slice(0, 100)}), עובר ל-Claude Haiku ל-10 הדקות הבאות`);
+    geminiDownUntil = Date.now() + 10 * 60_000;
     // אם כבר בוצע שינוי במערכת לפני הנפילה, לא מריצים שוב (כדי לא לעדכן פעמיים)
     if (replyAppendix.some((x) => x.startsWith("🧾"))) {
       return "⚠️ באמצע העבודה המוח החינמי נפל. מה שכבר נכנס למערכת מופיע בדוח למטה. בדוק אותו לפני שמבקש שוב.";

@@ -60,7 +60,7 @@ async function generate(apiKey, params) {
   const list = open.length ? open : all;
   // סבב שני: אם כל הדגמים עמוסים, מחכים רגע ומנסים שוב את הדגם הקל, עם זמן המתנה ארוך
   const fallback = all.filter((m) => /-lite$/.test(m)).slice(0, 1);
-  const tries = [...list.map((m) => [m, quickFail ? 25000 : 30000]), ...(quickFail ? [] : fallback.map((m) => [m, 90000, true]))];
+  const tries = [...list.map((m) => [m, quickFail ? 20000 : 30000]), ...(quickFail ? [] : fallback.map((m) => [m, 90000, true]))];
   for (const [model, waitMs, isRetry] of tries) {
     if (isRetry) await new Promise((r) => setTimeout(r, 3000));
     try {
@@ -87,7 +87,12 @@ async function generate(apiKey, params) {
       const code = e?.status ?? e?.code;
       if (![404, 429, 500, 503, 504].includes(code)) throw e; // שגיאה אחרת: לא מנסים דגם אחר
       if (code === 429 || code === 404) blockedUntil.set(model, Date.now() + 30 * 60_000);
-      else if (!isRetry) blockedUntil.set(model, Date.now() + 2 * 60_000);
+      else if (!isRetry) blockedUntil.set(model, Date.now() + 10 * 60_000);
+      // יש מוח גיבוי: לא מחכים לדגם הבא של גוגל, עוברים מיד ל-Claude
+      if (quickFail) {
+        console.log(`⚠️ Gemini ${model} לא זמין (${code}), עובר מיד למוח הגיבוי`);
+        throw Object.assign(new Error(`Gemini ${model} לא זמין (${code})`), { status: code });
+      }
       console.log(`⚠️ Gemini ${model} לא זמין (${code}), מנסה דגם אחר`);
     }
   }
